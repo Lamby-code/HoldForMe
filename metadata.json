@@ -1,0 +1,6 @@
+{
+  "name": "ParadoxLoop",
+  "description": "Puzzle temporal 2D donde cada vuelta de 20 segundos graba a un fantasma sólido que coopera o colisiona con tu presente.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
