@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, FastForward, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  FastForward,
+  Pause,
+  Play,
+  RotateCcw,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
+import { FutureMechanicsLegend } from './components/FutureMechanicsLegend.tsx';
 import { LevelSelectorModal } from './components/LevelSelectorModal.tsx';
 import { TimelineBar } from './components/TimelineBar.tsx';
 import { TitleMenu } from './components/TitleMenu.tsx';
 import { sfx } from './game/audio.ts';
-import { getLapColor } from './game/colors.ts';
+import { getLapCode, getLapColor } from './game/colors.ts';
 import { CANVAS_H, CANVAS_W, LEVELS } from './game/levels.ts';
 import { renderGame } from './game/render.ts';
 import {
@@ -138,9 +150,25 @@ export default function App() {
   // Keyboard bindings
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (screen !== 'play') return;
+      if (e.code === 'Escape' && !e.repeat) {
+        if (modalMode !== null) {
+          e.preventDefault();
+          setModalMode(null);
+          return;
+        }
+        if (screen === 'play') {
+          e.preventDefault();
+          setModalMode('levels');
+          return;
+        }
+      }
 
+      if (screen !== 'play' || modalMode !== null) return;
+
+      const isFocusedButton =
+        e.target instanceof HTMLButtonElement || e.target instanceof HTMLAnchorElement;
       const code = e.code;
+
       if (code === 'ArrowUp' || code === 'KeyW') {
         e.preventDefault();
         keysRef.current.up = true;
@@ -159,23 +187,20 @@ export default function App() {
           keysRef.current.rewind = true;
         }
       } else if (code === 'Enter') {
-        if (!e.repeat && modalMode === null) {
+        if (!e.repeat && !isFocusedButton) {
           e.preventDefault();
           handleFinishCurrentLap();
         }
       } else if (code === 'Space') {
-        e.preventDefault();
-        if (!e.repeat && !simRef.current.dead && !isWon(simRef.current)) {
-          setPaused((p) => !p);
+        if (!isFocusedButton) {
+          e.preventDefault();
+          if (!e.repeat && !simRef.current.dead && !isWon(simRef.current)) {
+            setPaused((p) => !p);
+          }
         }
       } else if (code === 'Delete') {
         e.preventDefault();
         if (!e.repeat) resetLevel(simRef.current.levelIndex);
-      } else if (code === 'Escape') {
-        e.preventDefault();
-        if (!e.repeat) {
-          setModalMode((m) => (m ? null : 'levels'));
-        }
       }
     };
 
@@ -306,36 +331,44 @@ export default function App() {
     return () => cancelAnimationFrame(rafId);
   }, [modalMode, screen, syncState]);
 
-  const level = LEVELS[simState.levelIndex];
-  const won = isWon(simState);
+  const world = deriveWorld(simState);
+  const { level, pressedPlates, openDoors, lasers, won } = world;
   const isTimeout = simState.dead && simState.cause === 'timeout';
   const showDeathCard =
     simState.dead && (isTimeout || simState.deathTimer >= DEATH_SLOWMO_FRAMES);
   const currentLapSeconds = (simState.t / TICK_HZ).toFixed(1);
   const lapColor = getLapColor(simState.lap);
+  const lapCode = getLapCode(simState.lap);
   const canEndLapEarly = !simState.dead && !won && simState.lap + 1 < level.maxLaps;
 
   return (
     <div className="min-h-screen bg-[#14161a] text-[#f1f5f9] flex flex-col">
-      {/* Top Bar Contract: Brand — nav links — 1 primary action */}
-      <header className="border-b border-[#2a303a] bg-[#14161a]">
-        <div className="max-w-[1100px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
+      {/* Top Bar: Brand — scalable navigation — 1 primary action */}
+      <header className="border-b border-[#2a303a] bg-[#14161a] shrink-0">
+        <div className="max-w-[1040px] mx-auto px-4 sm:px-6 h-12 flex items-center justify-between gap-4">
           <button
             type="button"
             onClick={() => {
               setModalMode(null);
               setScreen('menu');
             }}
-            className="text-xl font-bold tracking-tight text-white whitespace-nowrap shrink-0 cursor-pointer hover:text-[#4cc9f0] transition-colors"
+            className="text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0 cursor-pointer hover:text-[#4cc9f0] transition-colors rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
           >
             Hold For Me
           </button>
 
-          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-300">
+          <nav
+            aria-label="Navegación principal"
+            className="hidden sm:flex items-center gap-5 text-xs font-medium text-slate-300"
+          >
             <button
               type="button"
-              onClick={() => setScreen('menu')}
-              className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              onClick={() => {
+                setModalMode(null);
+                setScreen('menu');
+              }}
+              aria-current={screen === 'menu' ? 'page' : undefined}
+              className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer rounded px-1 py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0] ${
                 screen === 'menu' ? 'text-[#4cc9f0]' : 'hover:text-white'
               }`}
             >
@@ -344,46 +377,60 @@ export default function App() {
             <button
               type="button"
               onClick={() => setModalMode('levels')}
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer rounded px-1 py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
             >
-              Niveles
+              Niveles ({LEVELS.length})
             </button>
             <button
               type="button"
               onClick={() => setModalMode('rules')}
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer rounded px-1 py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
             >
               Reglas
             </button>
-            {LEVELS.map((lvl, idx) => (
-              <button
-                key={lvl.id}
-                type="button"
-                onClick={() => resetLevel(idx)}
-                className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  screen === 'play' && idx === levelIndex ? 'text-[#4cc9f0]' : 'hover:text-white'
-                }`}
-              >
-                Nivel {lvl.id}
-              </button>
-            ))}
+
+            {screen === 'play' && (
+              <div className="flex items-center gap-1.5 pl-3 border-l border-[#2a303a]">
+                <button
+                  type="button"
+                  disabled={levelIndex <= 0}
+                  onClick={() => resetLevel(levelIndex - 1)}
+                  aria-label="Nivel anterior"
+                  className="p-1 rounded text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-35 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#4cc9f0]"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <span className="font-mono tabular-nums text-slate-200 px-1">
+                  Nivel {level.id}/{LEVELS.length}
+                </span>
+                <button
+                  type="button"
+                  disabled={levelIndex + 1 >= LEVELS.length}
+                  onClick={() => resetLevel(levelIndex + 1)}
+                  aria-label="Siguiente nivel"
+                  className="p-1 rounded text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-35 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#4cc9f0]"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </nav>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
             {screen === 'menu' ? (
               <button
                 type="button"
                 onClick={() => resetLevel(0)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#4cc9f0] text-[#14161a] text-xs font-bold hover:bg-[#72d6f5] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-[#4cc9f0] text-[#14161a] text-xs font-bold hover:bg-[#72d6f5] transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
               >
                 <Play className="w-3.5 h-3.5 fill-current" />
-                Start
+                Comenzar
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() => resetLevel(levelIndex)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#232830] border border-[#2a303a] text-xs font-medium text-white hover:bg-[#2d333d] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#232830] border border-[#2a303a] text-xs font-medium text-white hover:bg-[#2d333d] transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 Reiniciar nivel
@@ -400,38 +447,55 @@ export default function App() {
           onOpenRules={() => setModalMode('rules')}
         />
       ) : (
-        <main className="flex-1 w-full max-w-[1008px] mx-auto px-4 sm:px-6 py-5 flex flex-col items-center">
-          <div className="w-full max-w-[960px] space-y-3">
+        <main className="flex-1 w-full max-w-[1008px] mx-auto px-4 sm:px-6 py-2.5 flex flex-col items-center justify-center">
+          <div className="w-full max-w-[960px] space-y-2">
             {/* Level Header & Controls */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="flex items-baseline gap-2.5 flex-wrap">
-                  <h1 className="text-lg sm:text-xl font-semibold text-white">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <h1 className="text-base sm:text-lg font-semibold text-white">
                     Nivel {level.id}: {level.name}
                   </h1>
                   <span aria-hidden="true" className="text-slate-600">·</span>
                   <span
-                    className="text-sm font-mono tabular-nums font-medium"
+                    className="text-xs sm:text-sm font-mono tabular-nums font-semibold"
                     style={{ color: lapColor }}
                   >
-                    Vuelta {simState.lap + 1} / {level.maxLaps}
+                    {lapCode} ({simState.lap + 1}/{level.maxLaps})
                   </span>
                   <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className="text-sm font-mono tabular-nums text-slate-300">
+                  <span className="text-xs sm:text-sm font-mono tabular-nums text-slate-300">
                     {currentLapSeconds} s / {LOOP_SECONDS.toFixed(1)} s
                   </span>
+                  <span className="hidden lg:inline-flex items-center gap-1 ml-1" aria-hidden="true">
+                    {Array.from({ length: level.maxLaps }).map((_, idx) => {
+                      const c = getLapColor(idx);
+                      const active = idx === simState.lap;
+                      const past = idx < simState.lap;
+                      return (
+                        <span
+                          key={idx}
+                          className="h-1.5 w-3.5 rounded-xs transition-opacity"
+                          style={{
+                            backgroundColor: c,
+                            opacity: active ? 1 : past ? 0.65 : 0.2,
+                          }}
+                        />
+                      );
+                    })}
+                  </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">{level.subtitle}</p>
+                <p className="text-xs text-slate-400 truncate">{level.subtitle}</p>
               </div>
 
               {/* Functional controls */}
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 {canEndLapEarly && (
                   <button
                     type="button"
                     onClick={handleFinishCurrentLap}
                     title="Fija tu posición actual hasta los 20 s y pasa directo a la siguiente vuelta (Enter)"
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#4cc9f0] text-[#14161a] text-xs font-semibold hover:bg-[#72d6f5] transition-colors whitespace-nowrap cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#4cc9f0] text-[#14161a] text-xs font-semibold hover:bg-[#72d6f5] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
                   >
                     <FastForward className="w-3.5 h-3.5" />
                     Terminar vuelta
@@ -441,19 +505,25 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setPaused((p) => !p)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1c2026] border border-[#2a303a] text-xs font-medium text-slate-200 hover:text-white hover:border-slate-500 transition-colors whitespace-nowrap cursor-pointer"
+                  aria-pressed={paused}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#1c2026] border border-[#2a303a] text-xs font-medium text-slate-200 hover:text-white hover:border-slate-500 transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
                 >
                   {paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
                   {paused ? 'Reanudar' : 'Pausar'}
                 </button>
 
-                <div className="flex items-center p-0.5 rounded-lg bg-[#1c2026] border border-[#2a303a]">
+                <div
+                  className="flex items-center p-0.5 rounded-lg bg-[#1c2026] border border-[#2a303a]"
+                  role="group"
+                  aria-label="Velocidad de simulación"
+                >
                   {([1, 2, 4] as const).map((s) => (
                     <button
                       key={s}
                       type="button"
                       onClick={() => setSpeed(s)}
-                      className={`px-2.5 py-1 rounded-md text-xs font-mono tabular-nums transition-colors cursor-pointer ${
+                      aria-pressed={speed === s}
+                      className={`px-2 py-1 rounded-md text-xs font-mono tabular-nums transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#4cc9f0] ${
                         speed === s ? 'bg-[#2a303a] text-white' : 'text-slate-400 hover:text-white'
                       }`}
                     >
@@ -465,7 +535,8 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setShowFuturePreview((v) => !v)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                  aria-pressed={showFuturePreview}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0] ${
                     showFuturePreview
                       ? 'bg-[#1c2026] border-[#4cc9f0]/50 text-[#4cc9f0]'
                       : 'bg-[#1c2026] border-[#2a303a] text-slate-400 hover:text-white'
@@ -483,52 +554,128 @@ export default function App() {
                     setMuted(nextMuted);
                   }}
                   aria-label={muted ? 'Activar sonido' : 'Silenciar sonido'}
-                  className="p-1.5 rounded-lg bg-[#1c2026] border border-[#2a303a] text-slate-400 hover:text-white transition-colors cursor-pointer"
+                  aria-pressed={muted}
+                  className="p-1.5 rounded-lg bg-[#1c2026] border border-[#2a303a] text-slate-400 hover:text-white transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
                 >
                   {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                 </button>
               </div>
             </div>
 
-            {/* Canvas Container */}
-            <div className="relative w-full aspect-[16/10] rounded-xl border border-[#2a303a] bg-[#14161a] overflow-hidden shadow-xl">
+            {/* Minimalist Hint & Live State Feedback Strip */}
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#1c2026] border border-[#2a303a] px-3 py-1.5 text-xs">
+              <p className="text-slate-300 leading-snug">
+                <span className="font-semibold text-[#4cc9f0] mr-1.5">Pista:</span>
+                {level.hint}
+              </p>
+
+              {(level.plates.length > 0 || level.doors.length > 0 || lasers.length > 0) && (
+                <div
+                  className="flex flex-wrap items-center gap-2 font-mono tabular-nums text-[11px] shrink-0"
+                  aria-label="Estado de mecanismos del nivel"
+                >
+                  {level.plates.map((plate) => {
+                    const active = pressedPlates.has(plate.id);
+                    return (
+                      <span
+                        key={plate.id}
+                        className={`px-1.5 py-0.5 rounded border ${
+                          active
+                            ? 'bg-[#8ecae6]/15 border-[#8ecae6]/60 text-white'
+                            : 'bg-[#14161a] border-[#2a303a] text-slate-400'
+                        }`}
+                      >
+                        Placa {plate.label}: {active ? 'Activa' : 'Libre'}
+                      </span>
+                    );
+                  })}
+                  {level.doors.map((door) => {
+                    const isOpen = openDoors.has(door.id);
+                    return (
+                      <span
+                        key={door.id}
+                        className={`px-1.5 py-0.5 rounded border ${
+                          isOpen
+                            ? 'bg-[#80ed99]/15 border-[#80ed99]/50 text-[#80ed99]'
+                            : 'bg-[#14161a] border-[#2a303a] text-slate-400'
+                        }`}
+                      >
+                        {door.id}: {isOpen ? 'Abierta' : 'Cerrada'}
+                      </span>
+                    );
+                  })}
+                  {lasers.map((seg) => (
+                    <span
+                      key={seg.id}
+                      className={`px-1.5 py-0.5 rounded border ${
+                        !seg.powered
+                          ? 'bg-[#14161a] border-[#2a303a] text-slate-400'
+                          : !seg.enabled
+                            ? 'bg-[#80ed99]/15 border-[#80ed99]/50 text-[#80ed99]'
+                            : seg.blockedByLap !== null
+                              ? 'bg-[#ffd166]/15 border-[#ffd166]/60 text-[#ffd166]'
+                              : 'bg-[#ff3b3b]/15 border-[#ff3b3b]/60 text-[#fca5a5]'
+                      }`}
+                    >
+                      {seg.id}:{' '}
+                      {!seg.powered
+                        ? 'Apagado'
+                        : !seg.enabled
+                          ? 'Deshabilitado'
+                          : seg.blockedByLap !== null
+                            ? `Bloqueado (${getLapCode(seg.blockedByLap)})`
+                            : 'Activo'}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Canvas Container (960x400 logical aspect 12:5) */}
+            <div className="relative w-full aspect-[12/5] rounded-xl border border-[#2a303a] bg-[#14161a] overflow-hidden shadow-xl">
               <canvas
                 ref={canvasRef}
                 width={CANVAS_W}
                 height={CANVAS_H}
+                aria-label={`Tablero del nivel ${level.id}: ${level.name}`}
                 className="w-full h-full block"
               />
 
               {/* Death / Loss Card */}
               {showDeathCard && (
-                <div className="absolute inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-                  <div className="w-full max-w-md rounded-xl bg-[#1c2026] border border-[#ff3b3b]/60 p-6 shadow-2xl">
+                <div
+                  role="alertdialog"
+                  aria-live="assertive"
+                  aria-labelledby="death-title"
+                  className="absolute inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+                >
+                  <div className="w-full max-w-md rounded-xl bg-[#1c2026] border border-[#ff3b3b]/60 p-5 shadow-2xl">
                     <div className="text-xs font-mono tabular-nums text-[#fca5a5]">
                       {isTimeout
-                        ? `Derrota · Vuelta ${simState.lap + 1} de ${level.maxLaps}`
-                        : `Vuelta ${simState.lap + 1} · ${currentLapSeconds} s`}
+                        ? `Derrota · ${lapCode} (${simState.lap + 1} de ${level.maxLaps})`
+                        : `${lapCode} · ${currentLapSeconds} s`}
                     </div>
-                    <h2 className="mt-1 text-2xl font-bold text-white">
+                    <h2 id="death-title" className="mt-1 text-xl font-bold text-white">
                       {isTimeout ? 'Te quedaste sin tiempo' : getDeathMessage(simState)}
                     </h2>
-                    <p className="mt-2 text-sm text-slate-300 leading-relaxed">
+                    <p className="mt-1.5 text-sm text-slate-300 leading-relaxed">
                       {isTimeout
                         ? 'Se terminó el loop antes de alcanzar la meta. Elegí reiniciar esta vuelta o empezar el nivel de nuevo.'
                         : 'La vuelta se interrumpió antes de llegar a la meta. Elegí reiniciar esta vuelta o empezar el nivel de nuevo.'}
                     </p>
 
-                    <div className="mt-5 flex flex-wrap items-center gap-3">
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
                       <button
                         type="button"
                         onClick={handleRewindToLapStart}
-                        className="px-4 py-2 rounded-lg bg-[#4cc9f0] text-[#14161a] text-sm font-semibold hover:bg-[#72d6f5] transition-colors whitespace-nowrap cursor-pointer"
+                        className="px-4 py-2 rounded-lg bg-[#4cc9f0] text-[#14161a] text-sm font-semibold hover:bg-[#72d6f5] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
                       >
                         Reiniciar vuelta
                       </button>
                       <button
                         type="button"
                         onClick={() => resetLevel(levelIndex)}
-                        className="px-4 py-2 rounded-lg bg-[#232830] border border-[#2a303a] text-sm font-medium text-white hover:bg-[#2d333d] transition-colors whitespace-nowrap cursor-pointer"
+                        className="px-4 py-2 rounded-lg bg-[#232830] border border-[#2a303a] text-sm font-medium text-white hover:bg-[#2d333d] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
                       >
                         Reiniciar nivel
                       </button>
@@ -539,23 +686,29 @@ export default function App() {
 
               {/* Victory Card */}
               {won && (
-                <div className="absolute inset-0 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4">
-                  <div className="w-full max-w-md rounded-xl bg-[#1c2026] border border-[#ffb703]/60 p-6 shadow-2xl">
+                <div
+                  role="dialog"
+                  aria-live="polite"
+                  aria-labelledby="win-title"
+                  className="absolute inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
+                >
+                  <div className="w-full max-w-md rounded-xl bg-[#1c2026] border border-[#ffb703]/60 p-5 shadow-2xl">
                     <div className="text-xs font-mono tabular-nums text-[#ffb703]">
-                      Nivel {level.id} resuelto · {simState.lap + 1} {simState.lap === 0 ? 'vuelta' : 'vueltas'}
+                      Nivel {level.id} resuelto · {simState.lap + 1}{' '}
+                      {simState.lap === 0 ? 'vuelta' : 'vueltas'}
                     </div>
-                    <h2 className="mt-1 text-2xl font-bold text-white">
+                    <h2 id="win-title" className="mt-1 text-xl font-bold text-white">
                       ¡Nivel {level.id} completado!
                     </h2>
-                    <p className="mt-2 text-sm text-slate-300 leading-relaxed">
+                    <p className="mt-1.5 text-sm text-slate-300 leading-relaxed">
                       El presente encontró el hueco que dejó tu historia.
                     </p>
-                    <div className="mt-5 flex flex-wrap items-center gap-3">
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
                       {levelIndex + 1 < LEVELS.length ? (
                         <button
                           type="button"
                           onClick={() => resetLevel(levelIndex + 1)}
-                          className="px-4 py-2 rounded-lg bg-[#ffb703] text-[#14161a] text-sm font-semibold hover:bg-[#ffc633] transition-colors whitespace-nowrap cursor-pointer"
+                          className="px-4 py-2 rounded-lg bg-[#ffb703] text-[#14161a] text-sm font-semibold hover:bg-[#ffc633] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffb703]"
                         >
                           Siguiente nivel
                         </button>
@@ -563,7 +716,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => resetLevel(0)}
-                          className="px-4 py-2 rounded-lg bg-[#ffb703] text-[#14161a] text-sm font-semibold hover:bg-[#ffc633] transition-colors whitespace-nowrap cursor-pointer"
+                          className="px-4 py-2 rounded-lg bg-[#ffb703] text-[#14161a] text-sm font-semibold hover:bg-[#ffc633] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffb703]"
                         >
                           Volver a jugar desde el 1
                         </button>
@@ -571,7 +724,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setModalMode('levels')}
-                        className="px-4 py-2 rounded-lg bg-[#232830] border border-[#2a303a] text-sm font-medium text-white hover:bg-[#2d333d] transition-colors whitespace-nowrap cursor-pointer"
+                        className="px-4 py-2 rounded-lg bg-[#232830] border border-[#2a303a] text-sm font-medium text-white hover:bg-[#2d333d] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
                       >
                         Selector de niveles
                       </button>
@@ -580,6 +733,9 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {/* Live Sequence / Moving Laser / Segment HUD (only shown if level declares them) */}
+            <FutureMechanicsLegend world={world} />
 
             {/* Interactive Timeline */}
             <TimelineBar
@@ -590,8 +746,8 @@ export default function App() {
             />
 
             {/* Quiet 1-line controls legend */}
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 pt-1">
-              <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+              <div className="flex flex-wrap items-center gap-2.5">
                 <span>Mover: WASD / Flechas</span>
                 <span aria-hidden="true" className="text-slate-600">·</span>
                 <span>Terminar vuelta: Enter</span>

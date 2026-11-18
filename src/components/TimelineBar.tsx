@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { getLapColor } from '../game/colors.ts';
+import { getLapCode, getLapColor } from '../game/colors.ts';
 import { FRAMES_PER_LAP, LOOP_SECONDS, TICK_HZ, type SimState } from '../game/sim.ts';
 
 interface TimelineBarProps {
@@ -44,14 +44,27 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
     handlePointerSeek(e);
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
+    if (e.key === 'Home') {
+      e.preventDefault();
+      onSeek(0, 0);
+    } else if (e.key === 'PageUp' || e.key === '[') {
+      e.preventDefault();
+      const targetGlobal = Math.max(0, currentTotalFrames - TICK_HZ);
+      const targetLap = Math.floor(targetGlobal / FRAMES_PER_LAP);
+      onSeek(targetLap, targetGlobal - targetLap * FRAMES_PER_LAP);
+    }
+  };
+
   const playheadPercent = (currentTotalFrames / totalFrames) * 100;
   const totalSeconds = (currentTotalFrames / TICK_HZ).toFixed(1);
   const maxSeconds = (maxLaps * LOOP_SECONDS).toFixed(0);
 
   return (
     <div className="w-full select-none">
-      <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
+        <div className="flex items-center gap-2.5">
           <span className="font-medium text-slate-200">Línea de tiempo</span>
           <span aria-hidden="true" className="text-slate-600">·</span>
           <span>Click o arrastrá para rebobinar</span>
@@ -65,17 +78,23 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
         ref={barRef}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
+        onKeyDown={handleKeyDown}
         role="slider"
         aria-label="Línea de tiempo de vueltas"
         aria-valuemin={0}
         aria-valuemax={totalFrames}
         aria-valuenow={currentTotalFrames}
-        tabIndex={0}
-        className="relative h-9 w-full rounded-lg bg-[#1c2026] border border-[#2a303a] overflow-hidden cursor-pointer focus-visible:outline-2 focus-visible:outline-[#4cc9f0]"
+        aria-valuetext={`Vuelta ${state.lap + 1} de ${maxLaps}, ${totalSeconds} segundos`}
+        aria-disabled={disabled}
+        tabIndex={disabled ? -1 : 0}
+        className={`relative h-8 w-full rounded-lg bg-[#1c2026] border border-[#2a303a] overflow-hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0] ${
+          disabled ? 'opacity-65 cursor-not-allowed' : 'cursor-pointer'
+        }`}
       >
         <div className="absolute inset-0 flex">
           {Array.from({ length: maxLaps }).map((_, idx) => {
             const color = getLapColor(idx);
+            const code = getLapCode(idx);
             const isPast = idx < state.lap;
             const isCurrent = idx === state.lap;
             const fillRatio = isPast
@@ -98,10 +117,10 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
                   }}
                 />
                 <span
-                  className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] font-medium font-mono tabular-nums pointer-events-none"
-                  style={{ color: isPast || isCurrent ? color : '#64748b' }}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] font-medium font-mono tabular-nums pointer-events-none whitespace-nowrap"
+                  style={{ color: isPast || isCurrent ? color : '#94a3b8' }}
                 >
-                  V{idx + 1} · {LOOP_SECONDS}s
+                  {code} · {LOOP_SECONDS}s
                 </span>
               </div>
             );

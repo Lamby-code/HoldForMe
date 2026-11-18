@@ -1,10 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { getLapCode, getLapColor, LAP_META, MAX_LAPS } from './colors.ts';
+import {
+  assertValidLevelDef,
+  CANVAS_H,
+  CANVAS_W,
+  LEVELS,
+  LevelValidationError,
+  validateLevelDef,
+  type LevelDef,
+} from './levels.ts';
 import {
   createInitialState,
+  createInitialStateForLevel,
   deriveWorld,
+  evaluateOrderedSequence,
   finishCurrentLap,
   FRAMES_PER_LAP,
+  getMovingLaserEndpoints,
+  getMovingLaserFactor,
   isWon,
   rewindStep,
   seekToFrame,
@@ -46,108 +60,130 @@ function runTicks(state: SimState, ticks: number, inputFn: (s: SimState) => Inpu
   return cur;
 }
 
-test('Level 1 (Caminar) can be solved in 1 lap', () => {
+test('Canvas is 960x400 and all built-in levels (N1-N7) pass O1 validation', () => {
+  assert.equal(CANVAS_W, 960);
+  assert.equal(CANVAS_H, 400);
+  assert.equal(LEVELS.length, 7);
+  for (const level of LEVELS) {
+    assert.deepEqual(validateLevelDef(level), []);
+  }
+  assert.equal(LEVELS[3].maxLaps, 3);
+  assert.equal(LEVELS[4].maxLaps, 3);
+  assert.equal(LEVELS[4].movingLasers?.length, 1);
+  assert.equal(LEVELS[4].orderedSwitchSequence, undefined);
+  assert.equal(LEVELS[5].maxLaps, 4);
+  assert.equal(LEVELS[5].movingLasers, undefined);
+  assert.equal(LEVELS[5].orderedSwitchSequence?.switches.length, 2);
+  assert.equal(LEVELS[5].laserSegments?.length, 1);
+  assert.equal(LEVELS[6].maxLaps, 5);
+  assert.equal(LEVELS[6].movingLasers?.length, 1);
+  assert.equal(LEVELS[6].orderedSwitchSequence?.switches.length, 3);
+  assert.equal(LEVELS[6].laserSegments?.length, 2);
+});
+
+test('Level 1 (Caminar) can be solved in 1 lap on 960x400', () => {
   let s = createInitialState(0);
   s = walkTo(s, 300, 60, 90);
   s = walkTo(s, 560, 60, 100);
-  s = walkTo(s, 816, 536, 200);
+  s = walkTo(s, 820, 316, 160);
   assert.equal(s.dead, false);
   assert.equal(isWon(s), true);
 });
 
-test('Level 2 (El sostén) solves in 2 laps and past trail is solid', () => {
+test('Level 2 (El sostén) solves in 2 laps and past trail is solid on 960x400', () => {
   let s = createInitialState(1);
-  // Lap 1: stand on Plate A (360, 300)
-  s = walkTo(s, 360, 300, FRAMES_PER_LAP);
+  // Lap 1: stand on Plate A (360, 200)
+  s = walkTo(s, 360, 200, FRAMES_PER_LAP);
   assert.equal(s.lap, 1);
 
-  // Lap 2: go around Lap 1 trail via top corridor and reach Goal (830, 300)
-  s = walkTo(s, 120, 200, 45);
-  s = walkTo(s, 520, 200, 140);
-  s = walkTo(s, 830, 300, 140);
+  // Lap 2: go around Lap 1 trail via top corridor and reach Goal (830, 200)
+  s = walkTo(s, 120, 100, 45);
+  s = walkTo(s, 520, 100, 140);
+  s = walkTo(s, 830, 200, 140);
   assert.equal(s.dead, false);
   assert.equal(isWon(s), true);
 });
 
-test('Level 3 (El relevo) solves in 3 laps', () => {
+test('Level 3 (El relevo) solves in 3 laps on 960x400', () => {
   let s = createInitialState(2);
-  // Lap 1: go straight up to Plate A (210, 150) and stay
-  s = walkTo(s, 110, 150, 100);
-  s = walkTo(s, 210, 150, FRAMES_PER_LAP - 100);
+  // Lap 1: go up to Plate A (210, 100) and hold
+  s = walkTo(s, 110, 100, 70);
+  s = walkTo(s, 210, 100, FRAMES_PER_LAP - 70);
   assert.equal(s.lap, 1);
 
-  // Lap 2: go right at y=420 -> up at x=290 -> Door 1 (y=260) -> Plate B (510, 460)
-  s = walkTo(s, 290, 420, 80);
-  s = walkTo(s, 290, 260, 80);
-  s = walkTo(s, 405, 260, 70);
-  s = walkTo(s, 510, 460, FRAMES_PER_LAP - 230);
+  // Lap 2: cross Door 1 (y=210) and hold Plate B (510, 308)
+  s = walkTo(s, 290, 280, 70);
+  s = walkTo(s, 290, 210, 40);
+  s = walkTo(s, 420, 210, 55);
+  s = walkTo(s, 510, 308, FRAMES_PER_LAP - 165);
   assert.equal(s.lap, 2);
 
-  // Lap 3: go up at x=200 (between Lap 1 at x=110 and Lap 2 at x=290) -> cross above Lap 2 at y=215 -> Door 1 -> Door 2 -> Goal
-  s = walkTo(s, 200, 420, 50);
-  s = walkTo(s, 200, 215, 80);
-  s = walkTo(s, 560, 215, 130);
-  s = walkTo(s, 560, 340, 60);
-  s = walkTo(s, 826, 340, 120);
+  // Lap 3: weave between Lap 1 and Lap 2 trails above y=146 through Door 1 and Door 2 to Goal
+  s = walkTo(s, 200, 280, 40);
+  s = walkTo(s, 200, 146, 55);
+  s = walkTo(s, 560, 146, 120);
+  s = walkTo(s, 560, 210, 35);
+  s = walkTo(s, 826, 210, 100);
   assert.equal(s.dead, false);
   assert.equal(isWon(s), true);
 });
 
-test('Level 4 (La cuadrilla) solves in 4 laps with laser blocking', () => {
+test('Level 4 (La cuadrilla) solves in 3 laps (V1-V3) conserving A, B, D1, D2, L1', () => {
   let s = createInitialState(3);
-  // Lap 1: hold Plate A (160, 140)
-  s = walkTo(s, 100, 140, 60);
-  s = walkTo(s, 160, 140, FRAMES_PER_LAP - 60);
+
+  // V1: hold Plate A (80, 88) for ~7s so D1 opens for Ghost 2, then move along bottom to block L1 at (520, 348)
+  s = walkTo(s, 80, 88, 60);
+  s = runTicks(s, 360, () => IDLE);
+  s = walkTo(s, 64, 88, 15);
+  s = walkTo(s, 64, 348, 90);
+  s = walkTo(s, 520, 348, 150);
+  s = runTicks(s, FRAMES_PER_LAP - 675, () => IDLE);
   assert.equal(s.lap, 1);
 
-  // Lap 2: take the top lane (y=228) through Door 1 to the laser blocker spot (492, 228)
-  s = walkTo(s, 172, 228, 45);
-  s = walkTo(s, 492, 228, 110);
-  s = runTicks(s, FRAMES_PER_LAP - 155, () => IDLE);
+  // V2: enter through Door 1 (300, 116) while Ghost 1 holds A, then hold Plate B (480, 96)
+  s = walkTo(s, 300, 116, 70);
+  s = walkTo(s, 480, 96, FRAMES_PER_LAP - 70);
   assert.equal(s.lap, 2);
 
-  // Lap 3: take the bottom lane (y=345) through Door 1, under Ghost 2, to Plate B (604, 470)
-  s = walkTo(s, 145, 345, 45);
-  s = walkTo(s, 492, 345, 110);
-  s = walkTo(s, 604, 470, 70);
-  s = runTicks(s, FRAMES_PER_LAP - 225, () => IDLE);
-  assert.equal(s.lap, 3);
-
-  // Verify laser is active and blocked by Ghost 2 at t = 700
-  const sCheck = runTicks(s, 700, () => IDLE);
-  const world = deriveWorld(sCheck);
+  // V3: wait until Ghost 1 blocks L1 and Ghost 2 holds B (t = 700)
+  s = runTicks(s, 700, () => IDLE);
+  const world = deriveWorld(s);
+  assert.equal(world.pressedPlates.has('B'), true);
+  assert.equal(world.openDoors.has('D2'), true);
   assert.equal(world.lasers[0].active, true);
-  assert.equal(world.lasers[0].blockedByLap, 1);
+  assert.equal(world.lasers[0].blockedByLap, 0);
 
-  // Lap 4: wait until Ghosts 1-3 are in place (~300 ticks), then walk straight down the middle lane (y=285) under Ghost 2 -> Door 2 -> Goal
-  s = runTicks(s, 300, () => IDLE);
-  s = walkTo(s, 220, 285, 45);
-  s = walkTo(s, 520, 285, 95);
-  s = walkTo(s, 732, 300, 70);
-  s = walkTo(s, 842, 300, 60);
+  // Cross under Ghost 1's blocked L1 and through open Door D2 to Goal (840, 260)
+  s = walkTo(s, 520, 260, 120);
+  s = walkTo(s, 840, 260, 110);
   assert.equal(s.dead, false);
   assert.equal(isWon(s), true);
 });
 
-test('Level 4 kills player with laser if Ghost 2 is not blocking', () => {
+test('Level 4 kills player with laser L1 when Ghost 1 holds A without blocking L1', () => {
   let s = createInitialState(3);
-  // Lap 1: hold Plate A
-  s = walkTo(s, 100, 140, 60);
-  s = walkTo(s, 160, 140, FRAMES_PER_LAP - 60);
-  // Lap 2: skip laser block and go straight through central gap (492, 300) to Plate B (604, 470)
-  s = walkTo(s, 492, 300, 140);
-  s = walkTo(s, 604, 470, FRAMES_PER_LAP - 140);
+  // V1: hold Plate A the entire lap (never move to block L1)
+  s = walkTo(s, 80, 88, FRAMES_PER_LAP);
+  assert.equal(s.lap, 1);
+
+  // V2: cross D1 and hold Plate B (powers L1 and opens D2)
+  s = walkTo(s, 300, 116, 70);
+  s = walkTo(s, 480, 96, FRAMES_PER_LAP - 70);
   assert.equal(s.lap, 2);
 
-  // Lap 3: Ghost 2 holds B so laser is ON! Go around via top -> Door 1 (y=240) -> cross laser at (520, 240) -> laser kills player
-  s = runTicks(s, 250, () => IDLE);
-  s = walkTo(s, 56, 300, 30);
-  s = walkTo(s, 56, 72, 80);
-  s = walkTo(s, 240, 72, 70);
-  s = walkTo(s, 240, 240, 60);
-  s = walkTo(s, 520, 240, 110);
+  // V3: wait until B is active, then try to cross L1 at (520, 260)
+  s = runTicks(s, 180, () => IDLE);
+  s = walkTo(s, 520, 260, 130);
   assert.equal(s.dead, true);
   assert.equal(s.cause, 'laser');
+});
+
+test('Level 4 triggers timeout when Lap 3 (final lap) runs out without reaching Goal', () => {
+  let s = createInitialState(3);
+  s = runTicks(s, FRAMES_PER_LAP * 3, () => IDLE);
+  assert.equal(s.lap, 2);
+  assert.equal(s.dead, true);
+  assert.equal(s.cause, 'timeout');
 });
 
 test('Rewind and seekToFrame restore exact past state and truncate future', () => {
@@ -169,8 +205,8 @@ test('Rewind and seekToFrame restore exact past state and truncate future', () =
 
 test('finishCurrentLap holds current position until end of lap and advances cleanly', () => {
   let s = createInitialState(1);
-  // Walk onto Plate A (~70 ticks) and end lap early
-  s = walkTo(s, 360, 300, 90);
+  // Walk onto Plate A (360, 200) and end lap early
+  s = walkTo(s, 360, 200, 90);
   assert.equal(s.lap, 0);
   const posOnPlate = { x: s.player.x, y: s.player.y };
 
@@ -182,9 +218,9 @@ test('finishCurrentLap holds current position until end of lap and advances clea
   assert.equal(s.laps[0][FRAMES_PER_LAP].y, posOnPlate.y);
 
   // In Lap 2, Ghost 1 holds Plate A so Door 1 stays open while player goes to Goal
-  s = walkTo(s, 120, 200, 45);
-  s = walkTo(s, 520, 200, 140);
-  s = walkTo(s, 830, 300, 140);
+  s = walkTo(s, 120, 100, 45);
+  s = walkTo(s, 520, 100, 140);
+  s = walkTo(s, 830, 200, 140);
   assert.equal(isWon(s), true);
 });
 
@@ -194,4 +230,1002 @@ test('Running out of time on the final lap triggers timeout loss', () => {
   assert.equal(s.dead, true);
   assert.equal(s.cause, 'timeout');
   assert.equal(isWon(s), false);
+});
+
+test('O1 explicit rejection rejects maxLaps outside 1..6 and invalid extensibility metadata', () => {
+  const baseLevel: LevelDef = structuredClone(LEVELS[0]);
+
+  // 1. maxLaps out of 1..6 (0 and 7)
+  assert.throws(
+    () => assertValidLevelDef({ ...baseLevel, maxLaps: 0 }),
+    LevelValidationError
+  );
+  assert.throws(
+    () => assertValidLevelDef({ ...baseLevel, maxLaps: 7 }),
+    LevelValidationError
+  );
+
+  // 2. Moving laser with periodFrames <= 0 or non-integer
+  assert.throws(
+    () =>
+      assertValidLevelDef({
+        ...baseLevel,
+        movingLasers: [
+          {
+            id: 'ML1',
+            pointA: { x: 200, y: 100 },
+            pointB: { x: 400, y: 100 },
+            periodFrames: 0,
+            phaseOffsetFrames: 0,
+            motion: 'ping-pong',
+          },
+        ],
+      }),
+    LevelValidationError
+  );
+  assert.throws(
+    () =>
+      assertValidLevelDef({
+        ...baseLevel,
+        movingLasers: [
+          {
+            id: 'ML1',
+            pointA: { x: 200, y: 100 },
+            pointB: { x: 400, y: 100 },
+            periodFrames: 120.5,
+            phaseOffsetFrames: 0,
+            motion: 'ping-pong',
+          },
+        ],
+      }),
+    LevelValidationError
+  );
+
+  // 3. Moving laser with non-finite or non-integer phaseOffsetFrames
+  assert.throws(
+    () =>
+      assertValidLevelDef({
+        ...baseLevel,
+        movingLasers: [
+          {
+            id: 'ML1',
+            pointA: { x: 200, y: 100 },
+            pointB: { x: 400, y: 100 },
+            periodFrames: 180,
+            phaseOffsetFrames: Number.NaN,
+            motion: 'ping-pong',
+          },
+        ],
+      }),
+    LevelValidationError
+  );
+  assert.throws(
+    () =>
+      assertValidLevelDef({
+        ...baseLevel,
+        movingLasers: [
+          {
+            id: 'ML1',
+            pointA: { x: 200, y: 100 },
+            pointB: { x: 400, y: 100 },
+            periodFrames: 180,
+            phaseOffsetFrames: 12.25,
+            motion: 'ping-pong',
+          },
+        ],
+      }),
+    LevelValidationError
+  );
+
+  // 4. Moving laser with pointA === pointB or invalid beamOffset / beamEnd
+  assert.throws(
+    () =>
+      assertValidLevelDef({
+        ...baseLevel,
+        movingLasers: [
+          {
+            id: 'ML1',
+            pointA: { x: 300, y: 150 },
+            pointB: { x: 300, y: 150 },
+            periodFrames: 180,
+            phaseOffsetFrames: 0,
+            motion: 'ping-pong',
+          },
+        ],
+      }),
+    LevelValidationError
+  );
+  assert.throws(
+    () =>
+      assertValidLevelDef({
+        ...baseLevel,
+        movingLasers: [
+          {
+            id: 'ML1',
+            pointA: { x: 200, y: 150 },
+            pointB: { x: 400, y: 150 },
+            beamOffset: { x: 0, y: 0 },
+            periodFrames: 180,
+            phaseOffsetFrames: 0,
+            motion: 'ping-pong',
+          },
+        ],
+      }),
+    LevelValidationError
+  );
+
+  // 5. LaserSegment with invalid laserId or invalid range [0..1]
+  assert.throws(
+    () =>
+      assertValidLevelDef({
+        ...baseLevel,
+        laserSegments: [
+          {
+            id: 'SEG1',
+            laserId: 'NON_EXISTENT_LASER',
+            range: { start: 0, end: 1 },
+            initialEnabled: true,
+          },
+        ],
+      }),
+    LevelValidationError
+  );
+  assert.throws(
+    () =>
+      assertValidLevelDef({
+        ...baseLevel,
+        lasers: [{ id: 'L1', x1: 300, y1: 100, x2: 300, y2: 300 }],
+        laserSegments: [
+          {
+            id: 'SEG1',
+            laserId: 'L1',
+            range: { start: 0.7, end: 0.5 },
+            initialEnabled: true,
+          },
+        ],
+      }),
+    LevelValidationError
+  );
+
+  // 6. Ordered switch referencing non-existent laserSegment
+  assert.throws(
+    () =>
+      assertValidLevelDef({
+        ...baseLevel,
+        lasers: [{ id: 'L1', x1: 300, y1: 100, x2: 300, y2: 300 }],
+        orderedSwitchSequence: {
+          scope: 'global',
+          resetOnError: true,
+          switches: [
+            {
+              id: 'S1',
+              label: '1',
+              x: 200,
+              y: 200,
+              r: 18,
+              order: 1,
+              targetSegmentIds: ['NON_EXISTENT_SEG'],
+              effect: 'disable',
+            },
+          ],
+        },
+      }),
+    LevelValidationError
+  );
+
+  // 7. Ordered switch sequence with gap in global numbering
+  assert.throws(
+    () =>
+      assertValidLevelDef({
+        ...baseLevel,
+        lasers: [{ id: 'L1', x1: 300, y1: 100, x2: 300, y2: 300 }],
+        laserSegments: [
+          { id: 'SEG1', laserId: 'L1', range: { start: 0, end: 1 }, initialEnabled: true },
+        ],
+        orderedSwitchSequence: {
+          scope: 'global',
+          resetOnError: true,
+          switches: [
+            {
+              id: 'S1',
+              label: '1',
+              x: 200,
+              y: 200,
+              r: 18,
+              order: 2,
+              targetSegmentIds: ['SEG1'],
+              effect: 'disable',
+            },
+          ],
+        },
+      }),
+    LevelValidationError
+  );
+
+  // 8. Valid Spec 002 extensibility metadata passes O1 validation cleanly
+  assert.deepEqual(
+    validateLevelDef({
+      ...baseLevel,
+      maxLaps: 6,
+      plates: [{ id: 'P1', label: 'P1', x: 200, y: 120, r: 20 }],
+      movingLasers: [
+        {
+          id: 'ML1',
+          pointA: { x: 400, y: 80 },
+          pointB: { x: 400, y: 320 },
+          beamOffset: { x: 0, y: -60 },
+          periodFrames: 240,
+          phaseOffsetFrames: 60,
+          motion: 'ping-pong',
+          poweredByPlates: ['P1'],
+        },
+      ],
+      laserSegments: [
+        {
+          id: 'SEG_ML1',
+          laserId: 'ML1',
+          range: { start: 0, end: 1 },
+          initialEnabled: true,
+        },
+      ],
+      orderedSwitchSequence: {
+        scope: 'global',
+        resetOnError: true,
+        switches: [
+          {
+            id: 'S1',
+            label: '1',
+            x: 250,
+            y: 250,
+            r: 18,
+            order: 1,
+            targetSegmentIds: ['SEG_ML1'],
+            effect: 'disable',
+          },
+        ],
+      },
+    }),
+    []
+  );
+});
+
+test('6-lap palette provides 6 distinct non-cyclic colors and rejects out-of-range lap indices', () => {
+  assert.equal(MAX_LAPS, 6);
+  assert.equal(LAP_META.length, 6);
+  const colors = LAP_META.map((_, idx) => getLapColor(idx));
+  const codes = LAP_META.map((_, idx) => getLapCode(idx));
+  assert.equal(new Set(colors).size, 6);
+  assert.deepEqual(codes, ['V1', 'V2', 'V3', 'V4', 'V5', 'V6']);
+  assert.throws(() => getLapColor(6), RangeError);
+  assert.throws(() => getLapColor(-1), RangeError);
+});
+
+test('D8 moving laser ping-pong formula is deterministic across t and phaseOffsetFrames', () => {
+  assert.equal(getMovingLaserFactor(120, 0, 0), 0);
+  assert.equal(getMovingLaserFactor(120, 0, 30), 0.5);
+  assert.equal(getMovingLaserFactor(120, 0, 60), 1);
+  assert.equal(getMovingLaserFactor(120, 0, 90), 0.5);
+  assert.equal(getMovingLaserFactor(120, 0, 120), 0);
+  assert.equal(getMovingLaserFactor(120, 0, 1170), 0.5);
+
+  // Positive and negative phase offsets
+  assert.equal(getMovingLaserFactor(120, 30, 0), 0.5);
+  assert.equal(getMovingLaserFactor(120, 30, 30), 1);
+  assert.equal(getMovingLaserFactor(120, -30, 0), 0.5);
+  assert.equal(getMovingLaserFactor(120, -30, 30), 0);
+
+  const mlBeamOffset = {
+    id: 'ML_OFF',
+    pointA: { x: 400, y: 340 },
+    pointB: { x: 600, y: 340 },
+    beamOffset: { x: 0, y: -200 },
+    periodFrames: 120,
+    phaseOffsetFrames: 0,
+    motion: 'ping-pong' as const,
+  };
+  assert.deepEqual(getMovingLaserEndpoints(mlBeamOffset, 0), {
+    x1: 400,
+    y1: 340,
+    x2: 400,
+    y2: 140,
+    u: 0,
+  });
+  assert.deepEqual(getMovingLaserEndpoints(mlBeamOffset, 60), {
+    x1: 600,
+    y1: 340,
+    x2: 600,
+    y2: 140,
+    u: 1,
+  });
+
+  const mlDual = {
+    id: 'ML_DUAL',
+    pointA: { x: 300, y: 350 },
+    pointB: { x: 500, y: 350 },
+    beamEndA: { x: 300, y: 100 },
+    beamEndB: { x: 540, y: 140 },
+    periodFrames: 120,
+    phaseOffsetFrames: 0,
+    motion: 'ping-pong' as const,
+  };
+  assert.deepEqual(getMovingLaserEndpoints(mlDual, 60), {
+    x1: 500,
+    y1: 350,
+    x2: 540,
+    y2: 140,
+    u: 1,
+  });
+});
+
+test('RF-8 precedence & moving laser ghost blocking work deterministically', () => {
+  const basePerimeter = LEVELS[0].walls.slice(0, 4);
+
+  const mlFixture: LevelDef = {
+    id: 91,
+    name: 'Fixture Moving Laser Precedence & Ghost Block',
+    subtitle: 'Precedence 1..4',
+    maxLaps: 2,
+    hint: 'Test',
+    spawn: { x: 120, y: 200 },
+    goal: { x: 820, y: 200, r: 24 },
+    walls: basePerimeter,
+    plates: [{ id: 'P1', label: 'P1', x: 200, y: 120, r: 20 }],
+    doors: [],
+    lasers: [],
+    movingLasers: [
+      {
+        id: 'ML1',
+        pointA: { x: 460, y: 340 },
+        pointB: { x: 580, y: 340 },
+        beamOffset: { x: 0, y: -280 },
+        periodFrames: 240,
+        phaseOffsetFrames: 0,
+        motion: 'ping-pong',
+        poweredByPlates: ['P1'],
+      },
+    ],
+    laserSegments: [
+      { id: 'SEG_ML1', laserId: 'ML1', range: { start: 0, end: 1 }, initialEnabled: true },
+    ],
+  };
+
+  // 1. Precedence 1: poweredByPlates off disables moving laser even when segment is enabled
+  let s = createInitialStateForLevel(mlFixture);
+  let world = deriveWorld(s);
+  assert.equal(world.lasers[0].powered, false);
+  assert.equal(world.lasers[0].enabled, true);
+  assert.equal(world.lasers[0].active, false);
+
+  // Walking across unpowered moving laser reaches Goal safely
+  const sWinUnpowered = walkTo(s, 820, 200, 220);
+  assert.equal(sWinUnpowered.dead, false);
+  assert.equal(isWon(sWinUnpowered), true);
+
+  // 2. Precedence 3: Lap 1 walks safely to (460, 300) while ML1 is unpowered, then Lap 2 powers P1
+  let sBlock = walkTo(s, 460, 300, 140);
+  sBlock = finishCurrentLap(sBlock);
+  assert.equal(sBlock.lap, 1);
+
+  // Player 2 steps onto P1 (200, 120) and waits until t=240 (u=0 -> ML1 at x=460, right under Ghost 1)
+  sBlock = walkTo(sBlock, 200, 120, 50);
+  sBlock = runTicks(sBlock, 240 - sBlock.t, () => IDLE);
+  world = deriveWorld(sBlock);
+  assert.equal(world.pressedPlates.has('P1'), true);
+  assert.equal(world.lasers[0].powered, true);
+  assert.equal(world.lasers[0].active, true);
+  assert.equal(world.lasers[0].blockedByLap, 0);
+  assert.ok(world.lasers[0].y2 >= 280);
+
+  // At t=360 (u=1 -> ML1 sweeps to x=580 away from Ghost 1), full beam is unblocked
+  const sSweep = runTicks(sBlock, 120, () => IDLE);
+  world = deriveWorld(sSweep);
+  assert.equal(world.lasers[0].blockedByLap, null);
+  assert.equal(world.lasers[0].x1, 580);
+  assert.equal(world.lasers[0].y2, 60);
+
+  // 3. Precedence 4: Ghost 1 holds P1 in Lap 2, Player 2 walks into unblocked ML1 and dies
+  let sHit = walkTo(s, 200, 120, 50);
+  sHit = finishCurrentLap(sHit);
+  assert.equal(sHit.lap, 1);
+  sHit = runTicks(sHit, 50, () => IDLE); // Wait until Ghost 1 reaches P1
+  sHit = walkTo(sHit, 620, 200, 180);
+  assert.equal(sHit.dead, true);
+  assert.equal(sHit.cause, 'laser');
+});
+
+test('LaserSegment splits beam span, respects disable state, and propagates upstream ghost occlusion', () => {
+  const basePerimeter = LEVELS[0].walls.slice(0, 4);
+
+  // Subcase A: Completing sequence disables SEG_HIGH (y=200..50) while SEG_LOW (y=350..200) stays active
+  const segFixture: LevelDef = {
+    id: 93,
+    name: 'Fixture LaserSegment Split',
+    subtitle: 'Segments & occlusion',
+    maxLaps: 2,
+    hint: 'Test',
+    spawn: { x: 120, y: 120 },
+    goal: { x: 760, y: 120, r: 24 },
+    walls: basePerimeter,
+    plates: [],
+    doors: [],
+    lasers: [{ id: 'L1', x1: 500, y1: 350, x2: 500, y2: 50 }],
+    laserSegments: [
+      { id: 'SEG_LOW', laserId: 'L1', range: { start: 0, end: 0.5 }, initialEnabled: true },
+      { id: 'SEG_HIGH', laserId: 'L1', range: { start: 0.5, end: 1 }, initialEnabled: true },
+    ],
+    orderedSwitchSequence: {
+      scope: 'global',
+      resetOnError: true,
+      switches: [
+        {
+          id: 'S1',
+          label: '1',
+          x: 240,
+          y: 120,
+          r: 20,
+          order: 1,
+          targetSegmentIds: ['SEG_HIGH'],
+          effect: 'disable',
+        },
+      ],
+    },
+  };
+
+  let s = createInitialStateForLevel(segFixture);
+  s = walkTo(s, 240, 120, 45);
+  let world = deriveWorld(s);
+  assert.equal(world.sequence.completed, true);
+  const segLow = world.lasers.find((l) => l.segmentId === 'SEG_LOW')!;
+  const segHigh = world.lasers.find((l) => l.segmentId === 'SEG_HIGH')!;
+  assert.equal(segLow.active, true);
+  assert.equal(segHigh.enabled, false);
+  assert.equal(segHigh.active, false);
+
+  // Player crosses SEG_HIGH at y=120 to Goal safely
+  s = walkTo(s, 760, 120, 160);
+  assert.equal(s.dead, false);
+  assert.equal(isWon(s), true);
+
+  // Subcase B: Upstream ghost on SEG_LOW occludes SEG_HIGH even when SEG_HIGH is enabled
+  const occlusionFixture: LevelDef = {
+    ...segFixture,
+    id: 930,
+    plates: [{ id: 'P1', label: 'P1', x: 180, y: 72, r: 20 }],
+    lasers: [{ id: 'L1', x1: 500, y1: 350, x2: 500, y2: 50, poweredByPlates: ['P1'] }],
+    orderedSwitchSequence: undefined,
+  };
+
+  let sLap1 = createInitialStateForLevel(occlusionFixture);
+  sLap1 = walkTo(sLap1, 500, 300, 150);
+  let sLap2 = finishCurrentLap(sLap1);
+  assert.equal(sLap2.lap, 1);
+
+  // Player 2 steps onto P1 so L1 powers on and waits until Ghost 1 reaches (500, 300) on SEG_LOW
+  sLap2 = walkTo(sLap2, 180, 72, 40);
+  sLap2 = runTicks(sLap2, 120, () => IDLE);
+  world = deriveWorld(sLap2);
+  const lap2Low = world.lasers.find((l) => l.segmentId === 'SEG_LOW')!;
+  const lap2High = world.lasers.find((l) => l.segmentId === 'SEG_HIGH')!;
+  assert.equal(lap2Low.powered, true);
+  assert.equal(lap2Low.blockedByLap, 0);
+  assert.equal(lap2High.enabled, true);
+  assert.equal(lap2High.active, false);
+  assert.equal(lap2High.blockedByLap, 0);
+});
+
+test('D3 switch activation triggers only for active player on outside->inside entry (not stay, not ghosts)', () => {
+  const basePerimeter = LEVELS[0].walls.slice(0, 4);
+  const d3Fixture: LevelDef = {
+    id: 94,
+    name: 'Fixture D3 Activation',
+    subtitle: 'Outside->inside & player-only',
+    maxLaps: 2,
+    hint: 'Test',
+    spawn: { x: 100, y: 200 },
+    goal: { x: 800, y: 200, r: 24 },
+    walls: basePerimeter,
+    plates: [],
+    doors: [],
+    lasers: [{ id: 'L1', x1: 600, y1: 40, x2: 600, y2: 360 }],
+    laserSegments: [
+      { id: 'SEG1', laserId: 'L1', range: { start: 0, end: 1 }, initialEnabled: true },
+    ],
+    orderedSwitchSequence: {
+      scope: 'global',
+      resetOnError: true,
+      switches: [
+        {
+          id: 'S1',
+          label: '1',
+          x: 200,
+          y: 200,
+          r: 20,
+          order: 1,
+          targetSegmentIds: ['SEG1'],
+          effect: 'disable',
+        },
+        {
+          id: 'S2',
+          label: '2',
+          x: 340,
+          y: 200,
+          r: 20,
+          order: 2,
+          targetSegmentIds: ['SEG1'],
+          effect: 'disable',
+        },
+      ],
+    },
+  };
+
+  // A. Enter S1 once -> step 1/2; staying inside for 60 ticks does NOT re-trigger or cause error
+  let s = createInitialStateForLevel(d3Fixture);
+  s = walkTo(s, 200, 200, 35);
+  let seq = deriveWorld(s).sequence;
+  assert.equal(seq.currentStep, 1);
+  assert.equal(seq.expectedOrder, 2);
+  assert.equal(seq.errorCount, 0);
+  assert.equal(seq.switches[0].playerInside, true);
+
+  s = runTicks(s, 60, () => IDLE);
+  seq = deriveWorld(s).sequence;
+  assert.equal(seq.currentStep, 1);
+  assert.equal(seq.errorCount, 0);
+  assert.equal(seq.hasRecentError, false);
+
+  // B. Exit S1 and re-enter S1 when #2 is expected -> triggers out-of-order error & resets to 0
+  s = walkTo(s, 130, 200, 25);
+  assert.equal(deriveWorld(s).sequence.switches[0].playerInside, false);
+  s = walkTo(s, 200, 200, 25);
+  seq = deriveWorld(s).sequence;
+  assert.equal(seq.currentStep, 0);
+  assert.equal(seq.errorCount, 1);
+  assert.equal(seq.hasRecentError, true);
+
+  // C. Ghost crossing S1 in Lap 2 never activates ordered switches
+  let sGhost = createInitialStateForLevel(d3Fixture);
+  sGhost = walkTo(sGhost, 200, 200, 40);
+  sGhost = finishCurrentLap(sGhost);
+  assert.equal(sGhost.lap, 1);
+
+  // Step 50 frames in Lap 2 while active player stays idle at spawn (Ghost 1 walks onto S1)
+  // Lap 1 already set sequence to 1/2 (expectedOrder=2); Ghost 1 entering S1 must NOT advance or cause error!
+  sGhost = runTicks(sGhost, 50, () => IDLE);
+  const lap2World = deriveWorld(sGhost);
+  assert.ok(Math.hypot(lap2World.ghosts[0].x - 200, lap2World.ghosts[0].y - 200) <= 24);
+  assert.equal(lap2World.sequence.currentStep, 1);
+  assert.equal(lap2World.sequence.expectedOrder, 2);
+  assert.equal(lap2World.sequence.errorCount, 0);
+  assert.equal(lap2World.sequence.hasRecentError, false);
+});
+
+test('D2 global sequence completes, persists after leaving switches, resets on error, and retries to win', () => {
+  const basePerimeter = LEVELS[0].walls.slice(0, 4);
+  const d2Fixture: LevelDef = {
+    id: 95,
+    name: 'Fixture D2 Sequence',
+    subtitle: 'Advance, error reset, persist, win',
+    maxLaps: 2,
+    hint: 'Test',
+    spawn: { x: 100, y: 200 },
+    goal: { x: 740, y: 200, r: 24 },
+    walls: basePerimeter,
+    plates: [],
+    doors: [],
+    lasers: [{ id: 'L1', x1: 540, y1: 40, x2: 540, y2: 360 }],
+    laserSegments: [
+      { id: 'SEG1', laserId: 'L1', range: { start: 0, end: 1 }, initialEnabled: true },
+    ],
+    orderedSwitchSequence: {
+      scope: 'global',
+      resetOnError: true,
+      switches: [
+        {
+          id: 'S1',
+          label: '1',
+          x: 200,
+          y: 200,
+          r: 20,
+          order: 1,
+          targetSegmentIds: ['SEG1'],
+          effect: 'disable',
+        },
+        {
+          id: 'S2',
+          label: '2',
+          x: 340,
+          y: 200,
+          r: 20,
+          order: 2,
+          targetSegmentIds: ['SEG1'],
+          effect: 'disable',
+        },
+      ],
+    },
+  };
+
+  let s = createInitialStateForLevel(d2Fixture);
+
+  // 1. Trigger error first by bypassing S1 (walk above y=120) and entering S2
+  s = walkTo(s, 200, 120, 40);
+  s = walkTo(s, 340, 120, 45);
+  s = walkTo(s, 340, 200, 30);
+  let world = deriveWorld(s);
+  assert.equal(world.sequence.currentStep, 0);
+  assert.equal(world.sequence.completed, false);
+  assert.equal(world.sequence.hasRecentError, true);
+  assert.equal(world.sequence.segmentEnabled.SEG1, true);
+  assert.equal(world.lasers[0].active, true);
+
+  // 2. Exit S2, activate S1 then S2 in order
+  s = walkTo(s, 270, 200, 25);
+  s = walkTo(s, 200, 200, 25);
+  world = deriveWorld(s);
+  assert.equal(world.sequence.currentStep, 1);
+  assert.equal(world.sequence.hasRecentError, false);
+  assert.equal(world.sequence.segmentEnabled.SEG1, true);
+
+  s = walkTo(s, 340, 200, 45);
+  world = deriveWorld(s);
+  assert.equal(world.sequence.currentStep, 2);
+  assert.equal(world.sequence.completed, true);
+  assert.equal(world.sequence.segmentEnabled.SEG1, false);
+  assert.equal(world.lasers[0].active, false);
+
+  // 3. Branch A: verify post-completion error resets sequence and restores initialEnabled (true)
+  let sPostErr = walkTo(s, 270, 200, 25);
+  sPostErr = walkTo(sPostErr, 200, 200, 25);
+  const errWorld = deriveWorld(sPostErr);
+  assert.equal(errWorld.sequence.completed, false);
+  assert.equal(errWorld.sequence.currentStep, 0);
+  assert.equal(errWorld.sequence.hasRecentError, true);
+  assert.equal(errWorld.sequence.segmentEnabled.SEG1, true);
+  assert.equal(errWorld.lasers[0].active, true);
+
+  // 4. Branch B: from completed state, leave switches and cross disabled L1 to Goal -> WIN
+  s = walkTo(s, 740, 200, 140);
+  assert.equal(s.dead, false);
+  assert.equal(isWon(s), true);
+});
+
+test('D4 rewindStep and seekToFrame keep ordered switches & segments 100% deterministic with zero cross-lap leakage', () => {
+  const basePerimeter = LEVELS[0].walls.slice(0, 4);
+  const d4Fixture: LevelDef = {
+    id: 96,
+    name: 'Fixture D4 Determinism',
+    subtitle: 'Rewind & seek',
+    maxLaps: 2,
+    hint: 'Test',
+    spawn: { x: 100, y: 200 },
+    goal: { x: 740, y: 200, r: 24 },
+    walls: basePerimeter,
+    plates: [],
+    doors: [],
+    lasers: [{ id: 'L1', x1: 540, y1: 40, x2: 540, y2: 360 }],
+    laserSegments: [
+      { id: 'SEG1', laserId: 'L1', range: { start: 0, end: 1 }, initialEnabled: true },
+    ],
+    orderedSwitchSequence: {
+      scope: 'global',
+      resetOnError: true,
+      switches: [
+        {
+          id: 'S1',
+          label: '1',
+          x: 200,
+          y: 200,
+          r: 20,
+          order: 1,
+          targetSegmentIds: ['SEG1'],
+          effect: 'disable',
+        },
+        {
+          id: 'S2',
+          label: '2',
+          x: 340,
+          y: 200,
+          r: 20,
+          order: 2,
+          targetSegmentIds: ['SEG1'],
+          effect: 'disable',
+        },
+      ],
+    },
+  };
+
+  let s = createInitialStateForLevel(d4Fixture);
+  s = walkTo(s, 150, 200, 15);
+  const tBeforeS1 = s.t;
+  assert.equal(deriveWorld(s).sequence.currentStep, 0);
+
+  s = walkTo(s, 200, 200, 20);
+  assert.equal(deriveWorld(s).sequence.currentStep, 1);
+
+  s = walkTo(s, 340, 200, 45);
+  const tCompleted = s.t;
+  const completedStateSnapshot = structuredClone(s);
+  const completedWorldSnapshot = deriveWorld(s);
+  assert.equal(completedWorldSnapshot.sequence.completed, true);
+  assert.equal(completedWorldSnapshot.sequence.segmentEnabled.SEG1, false);
+
+  // Trigger an error after completion
+  s = walkTo(s, 270, 200, 25);
+  s = walkTo(s, 340, 200, 25);
+  assert.equal(deriveWorld(s).sequence.hasRecentError, true);
+  assert.equal(deriveWorld(s).sequence.segmentEnabled.SEG1, true);
+
+  // Rewind back to tCompleted
+  const rewound = rewindStep(s, s.t - tCompleted);
+  assert.equal(rewound.t, tCompleted);
+  assert.deepEqual(deriveWorld(rewound).sequence, completedWorldSnapshot.sequence);
+
+  // Seek back before S1 and replay identical steps -> bit-for-bit identical SimState & DerivedWorld
+  let sought = seekToFrame(s, 0, tBeforeS1);
+  assert.equal(deriveWorld(sought).sequence.currentStep, 0);
+  assert.equal(deriveWorld(sought).sequence.errorCount, 0);
+  assert.equal(deriveWorld(sought).sequence.segmentEnabled.SEG1, true);
+
+  sought = walkTo(sought, 200, 200, 20);
+  sought = walkTo(sought, 340, 200, 45);
+  assert.deepEqual(sought, completedStateSnapshot);
+  assert.deepEqual(deriveWorld(sought), completedWorldSnapshot);
+
+  // Advancing to Lap 2 preserves replay-derived progress from laps[0] without hidden state
+  const lap2 = finishCurrentLap(completedStateSnapshot);
+  assert.equal(lap2.lap, 1);
+  assert.equal(deriveWorld(lap2).sequence.currentStep, 2);
+  assert.equal(deriveWorld(lap2).sequence.completed, true);
+  assert.equal(deriveWorld(lap2).sequence.segmentEnabled.SEG1, false);
+
+  // Seeking back into Lap 1 before S1 reverts replay-derived state cleanly
+  const backToLap1Before = seekToFrame(lap2, 0, tBeforeS1);
+  assert.equal(backToLap1Before.lap, 0);
+  assert.equal(deriveWorld(backToLap1Before).sequence.currentStep, 0);
+  assert.equal(deriveWorld(backToLap1Before).sequence.segmentEnabled.SEG1, true);
+
+  // Direct pure evaluation check
+  const directSeq = evaluateOrderedSequence(d4Fixture, completedStateSnapshot.current, false);
+  assert.equal(directSeq.completed, true);
+  assert.equal(directSeq.segmentEnabled.SEG1, false);
+});
+
+test('Level 5 (El pulso) solves deterministically in 3 laps (V1-V3) via moving laser block + door A', () => {
+  let s = createInitialState(4); // Level 5
+
+  // V1: while ML1 is unpowered (A unpressed), walk along bottom corridor to blocking spot (550, 326)
+  s = walkTo(s, 100, 326, 45);
+  s = walkTo(s, 550, 326, 135);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 1);
+
+  // V2: hold Plate A (200, 96) so D1 stays open and ML1 powers on for V3
+  s = walkTo(s, 200, 96, 60);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 2);
+
+  // V3: wait for Ghost 2 on Plate A, position just before corridor at (416, 200)
+  s = walkTo(s, 416, 200, 120);
+  const wAtWait = deriveWorld(s);
+  assert.equal(wAtWait.openDoors.has('D1'), true);
+  assert.equal(wAtWait.lasers[0].powered, true);
+
+  // Synchronize crossing so player reaches x=550 around t % 120 == 90 (center of Ghost 1 block)
+  const mod = s.t % 120;
+  const waitTicks = (54 - mod + 120) % 120;
+  s = runTicks(s, waitTicks, () => IDLE);
+
+  // Sprint through corridor (ML1 blocked by Ghost 1 at x=550) and through open D1 to Goal (848, 200)
+  s = walkTo(s, 740, 200, 95);
+  s = walkTo(s, 848, 200, 45);
+  assert.equal(s.dead, false);
+  assert.equal(isWon(s), true);
+});
+
+test('Level 5 fails if moving laser ML1 is not blocked by Ghost 1 or if Lap 3 times out', () => {
+  // Case A: Skip blocking ML1 in V1, hold A in V2, attempt crossing corridor in V3 -> laser death
+  let s = createInitialState(4);
+  s = finishCurrentLap(s); // V1 stays at spawn (no block on ML1)
+  s = walkTo(s, 200, 96, 60);
+  s = finishCurrentLap(s); // V2 holds Plate A
+  s = runTicks(s, 80, () => IDLE); // Wait until Ghost 2 powers ML1
+  s = walkTo(s, 680, 200, 180);
+  assert.equal(s.dead, true);
+  assert.equal(s.cause, 'laser');
+
+  // Case B: Timeout when Lap 3 ends without reaching Goal
+  let sTimeout = createInitialState(4);
+  sTimeout = runTicks(sTimeout, FRAMES_PER_LAP * 3, () => IDLE);
+  assert.equal(sTimeout.lap, 2);
+  assert.equal(sTimeout.dead, true);
+  assert.equal(sTimeout.cause, 'timeout');
+});
+
+test('Level 6 (Orden correcto) solves deterministically in 4 laps (V1-V4) with ordered switches & SEG1', () => {
+  let s = createInitialState(5); // Level 6
+
+  // V1: hold Plate A (200, 316) to keep Door D1 open
+  s = walkTo(s, 100, 316, 45);
+  s = walkTo(s, 200, 316, 40);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 1);
+
+  // V2: cross top lane of D1 and activate Switch #1 (S1 at 480, 80) -> sequence 1/2
+  s = walkTo(s, 240, 128, 60);
+  s = walkTo(s, 360, 128, 45);
+  s = walkTo(s, 360, 80, 25);
+  s = walkTo(s, 480, 80, 45);
+  const wV2 = deriveWorld(s);
+  assert.equal(wV2.sequence.currentStep, 1);
+  assert.equal(wV2.sequence.expectedOrder, 2);
+  assert.equal(wV2.sequence.completed, false);
+  assert.equal(wV2.sequence.segmentEnabled.SEG1, true);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 2);
+
+  // V3: cross bottom lane of D1 and activate Switch #2 (S2 at 480, 320) -> sequence 2/2 disables SEG1
+  s = walkTo(s, 240, 272, 60);
+  s = walkTo(s, 360, 272, 45);
+  s = walkTo(s, 360, 320, 25);
+  s = walkTo(s, 480, 320, 45);
+  const wV3 = deriveWorld(s);
+  assert.equal(wV3.sequence.currentStep, 2);
+  assert.equal(wV3.sequence.completed, true);
+  assert.equal(wV3.sequence.segmentEnabled.SEG1, false);
+  assert.equal(wV3.lasers[0].active, false);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 3);
+
+  // V4: walk straight down middle corridor (y=200), cross disabled SEG1 to Goal (830, 200)
+  s = runTicks(s, 90, () => IDLE); // Wait for Ghost 1 to hold Plate A and open D1
+  const wV4 = deriveWorld(s);
+  assert.equal(wV4.openDoors.has('D1'), true);
+  assert.equal(wV4.lasers[0].active, false);
+  s = walkTo(s, 830, 200, 220);
+  assert.equal(s.dead, false);
+  assert.equal(isWon(s), true);
+});
+
+test('Level 6 resets sequence on out-of-order switch activation and kills player at L1/SEG1', () => {
+  let s = createInitialState(5); // Level 6
+  s = walkTo(s, 100, 316, 45);
+  s = walkTo(s, 200, 316, 40);
+  s = finishCurrentLap(s);
+
+  // In V2, activate S2 BEFORE S1 -> triggers order error, resets to 0/2, SEG1 stays enabled
+  s = runTicks(s, 90, () => IDLE);
+  s = walkTo(s, 240, 272, 60);
+  s = walkTo(s, 360, 272, 45);
+  s = walkTo(s, 360, 320, 25);
+  s = walkTo(s, 480, 320, 45);
+  const errWorld = deriveWorld(s);
+  assert.equal(errWorld.sequence.currentStep, 0);
+  assert.equal(errWorld.sequence.hasRecentError, true);
+  assert.equal(errWorld.sequence.segmentEnabled.SEG1, true);
+  assert.equal(errWorld.lasers[0].active, true);
+
+  // Trying to cross L1/SEG1 at (660, 200) kills player with laser
+  s = walkTo(s, 600, 320, 45);
+  s = walkTo(s, 600, 200, 45);
+  s = walkTo(s, 690, 200, 40);
+  assert.equal(s.dead, true);
+  assert.equal(s.cause, 'laser');
+});
+
+test('Level 7 (Sincronía) solves deterministically in 5 laps (V1-V5) combining moving laser, 3 switches, and 2 segments', () => {
+  let s = createInitialState(6); // Level 7
+
+  // V1: go straight UP then right to Plate A (176, 88)
+  s = walkTo(s, 96, 88, 35);
+  s = walkTo(s, 176, 88, 30);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 1);
+
+  // V2: take upper-right lane, activate S1 (350, 96) and S2 (450, 96) -> progress 2/3
+  s = walkTo(s, 150, 140, 28);
+  s = walkTo(s, 260, 112, 35);
+  s = walkTo(s, 350, 96, 30);
+  s = walkTo(s, 450, 96, 35);
+  const wV2 = deriveWorld(s);
+  assert.equal(wV2.sequence.currentStep, 2);
+  assert.equal(wV2.sequence.expectedOrder, 3);
+  assert.equal(wV2.sequence.completed, false);
+  assert.equal(wV2.sequence.segmentEnabled.SEG_S_BOT, true);
+  assert.equal(wV2.sequence.segmentEnabled.SEG_S_TOP, true);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 2);
+
+  // V3: wait for Ghost 1 to open D1, take lower-middle lane, activate S3 (400, 236) -> completes 3/3
+  // Then cross disabled L1 and park in ML1 block bay (706, 328) while ML1 is unpowered
+  s = runTicks(s, 65, () => IDLE);
+  s = walkTo(s, 150, 248, 28);
+  s = walkTo(s, 260, 248, 35);
+  s = walkTo(s, 400, 236, 45);
+  const wV3 = deriveWorld(s);
+  assert.equal(wV3.sequence.currentStep, 3);
+  assert.equal(wV3.sequence.completed, true);
+  assert.equal(wV3.sequence.segmentEnabled.SEG_S_BOT, false);
+  assert.equal(wV3.sequence.segmentEnabled.SEG_S_TOP, false);
+  s = walkTo(s, 570, 236, 55);
+  s = walkTo(s, 570, 328, 35);
+  s = walkTo(s, 706, 328, 50);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 3);
+
+  // V4: wait past Ghost 3's departure from spawn, go straight DOWN then right to Plate B (380, 316)
+  s = runTicks(s, 90, () => IDLE);
+  s = walkTo(s, 96, 316, 38);
+  s = walkTo(s, 220, 304, 40);
+  s = walkTo(s, 260, 296, 20);
+  s = walkTo(s, 380, 316, 40);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 4);
+
+  // V5: wait for ghosts to clear spawn & open D1, walk straight RIGHT along y=200 lane to safe staging point (560, 186)
+  s = runTicks(s, 120, () => IDLE);
+  s = walkTo(s, 260, 200, 50);
+  s = walkTo(s, 560, 186, 90);
+  // Wait at x=560 (well left of ML1's leftmost sweep) until Ghost 3 & Ghost 4 are in position (t >= 315)
+  if (s.t < 315) {
+    s = runTicks(s, 315 - s.t, () => IDLE);
+  }
+  const wPreCross = deriveWorld(s);
+  assert.equal(wPreCross.openDoors.has('D2'), true);
+  assert.equal(wPreCross.sequence.completed, true);
+
+  // Synchronize crossing of ML1 (periodFrames=96, u=0.5 centered at t % 96 == 24 and 72):
+  // Leave x=560 at t % 96 == 32 so player passes x=600 at t % 96 == 43 and x=706 around t % 96 == 72
+  const mod7 = s.t % 96;
+  const wait7 = (32 - mod7 + 96) % 96;
+  s = runTicks(s, wait7, () => IDLE);
+
+  s = walkTo(s, 804, 196, 75);
+  s = walkTo(s, 868, 200, 30);
+  assert.equal(s.dead, false);
+  assert.equal(isWon(s), true);
+});
+
+test('Level 7 fails on out-of-order switch error and on unblocked moving laser ML1', () => {
+  // Case A: hitting S3 out of order (before S1->S2) resets sequence; crossing L1 kills player
+  let s = createInitialState(6);
+  s = walkTo(s, 96, 88, 35);
+  s = walkTo(s, 176, 88, 30);
+  s = finishCurrentLap(s); // V1 holds A
+  s = runTicks(s, 65, () => IDLE);
+  s = walkTo(s, 150, 248, 28);
+  s = walkTo(s, 260, 248, 35);
+  s = walkTo(s, 400, 236, 45); // S3 out of order!
+  const wErr = deriveWorld(s);
+  assert.equal(wErr.sequence.currentStep, 0);
+  assert.equal(wErr.sequence.hasRecentError, true);
+  assert.equal(wErr.sequence.segmentEnabled.SEG_S_BOT, true);
+  s = walkTo(s, 560, 236, 60);
+  assert.equal(s.dead, true);
+  assert.equal(s.cause, 'laser');
+
+  // Case B: complete S1->S2->S3 and power B, but skip Ghost 3 block on ML1 -> ML1 kills player in corridor
+  let sNoBlock = createInitialState(6);
+  sNoBlock = walkTo(sNoBlock, 96, 88, 35);
+  sNoBlock = walkTo(sNoBlock, 176, 88, 30);
+  sNoBlock = finishCurrentLap(sNoBlock); // V1 holds A
+  sNoBlock = walkTo(sNoBlock, 150, 140, 28);
+  sNoBlock = walkTo(sNoBlock, 260, 112, 35);
+  sNoBlock = walkTo(sNoBlock, 350, 96, 30);
+  sNoBlock = walkTo(sNoBlock, 450, 96, 35);
+  sNoBlock = finishCurrentLap(sNoBlock); // V2 hits S1, S2
+  sNoBlock = runTicks(sNoBlock, 65, () => IDLE);
+  sNoBlock = walkTo(sNoBlock, 150, 248, 28);
+  sNoBlock = walkTo(sNoBlock, 260, 248, 35);
+  sNoBlock = walkTo(sNoBlock, 400, 236, 45);
+  sNoBlock = finishCurrentLap(sNoBlock); // V3 hits S3 ONLY (does not block ML1)
+  sNoBlock = runTicks(sNoBlock, 90, () => IDLE);
+  sNoBlock = walkTo(sNoBlock, 96, 316, 38);
+  sNoBlock = walkTo(sNoBlock, 220, 304, 40);
+  sNoBlock = walkTo(sNoBlock, 260, 296, 20);
+  sNoBlock = walkTo(sNoBlock, 380, 316, 40);
+  sNoBlock = finishCurrentLap(sNoBlock); // V4 holds Plate B (powers ML1)
+  sNoBlock = runTicks(sNoBlock, 230, () => IDLE); // Wait for Ghost 4 to power ML1
+  sNoBlock = walkTo(sNoBlock, 260, 200, 50);
+  sNoBlock = walkTo(sNoBlock, 820, 186, 170);
+  assert.equal(sNoBlock.dead, true);
+  assert.equal(sNoBlock.cause, 'laser');
 });

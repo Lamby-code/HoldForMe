@@ -1,4 +1,10 @@
-import { LEVELS, type LevelDef, type Rect } from './levels.ts';
+import {
+  assertValidLevelDef,
+  LEVELS,
+  type LevelDef,
+  type MovingLaser,
+  type Rect,
+} from './levels.ts';
 
 export const TICK_HZ = 60;
 export const LOOP_SECONDS = 20;
@@ -10,6 +16,7 @@ export const TRAIL_HALF_WIDTH = 12;
 export const TRAIL_SAMPLE_INTERVAL = 4;
 export const SPAWN_SAFE_RADIUS = 44;
 export const LASER_BEAM_HALF_WIDTH = 5;
+export const SWITCH_ACTIVATION_MARGIN = 4;
 export const DEATH_SLOWMO_FRAMES = 24; // 0.4s at 60 Hz
 const RESOLVE_PASSES = 2;
 
@@ -30,6 +37,8 @@ export type DeathCause = 'crush' | 'laser' | 'timeout';
 
 export interface SimState {
   levelIndex: number;
+  /** Optional custom level definition (e.g. test fixtures) without mutating campaign LEVELS */
+  levelDef?: LevelDef;
   lap: number;
   t: number;
   player: {
@@ -55,12 +64,47 @@ export interface GhostEntity {
 
 export interface ActiveLaserSegment {
   id: string;
+  laserId: string;
+  segmentId: string | null;
+  isMoving: boolean;
+  powered: boolean;
+  enabled: boolean;
   active: boolean;
   x1: number;
   y1: number;
   x2: number;
   y2: number;
+  fullX2: number;
+  fullY2: number;
   blockedByLap: number | null;
+}
+
+export interface DerivedOrderedSwitch {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  r: number;
+  order: number;
+  targetSegmentIds: string[];
+  effect: 'enable' | 'disable';
+  activated: boolean;
+  isExpected: boolean;
+  playerInside: boolean;
+}
+
+export interface DerivedSequenceState {
+  present: boolean;
+  currentStep: number;
+  expectedOrder: number | null;
+  totalSteps: number;
+  completed: boolean;
+  errorCount: number;
+  hasRecentError: boolean;
+  lastErrorTick: number | null;
+  lastErrorSwitchId: string | null;
+  switches: DerivedOrderedSwitch[];
+  segmentEnabled: Record<string, boolean>;
 }
 
 export interface DerivedWorld {
@@ -69,15 +113,29 @@ export interface DerivedWorld {
   pressedPlates: Set<string>;
   openDoors: Set<string>;
   lasers: ActiveLaserSegment[];
+  sequence: DerivedSequenceState;
   won: boolean;
 }
 
 export function createInitialState(levelIndex: number): SimState {
   const safeIdx = Math.max(0, Math.min(LEVELS.length - 1, levelIndex));
   const level = LEVELS[safeIdx];
+  return createInitialStateForLevel(level, safeIdx, false);
+}
+
+/**
+ * Pure constructor accepting an arbitrary validated LevelDef (for test fixtures per D7).
+ */
+export function createInitialStateForLevel(
+  level: LevelDef,
+  levelIndex = 0,
+  attachLevelDef = true
+): SimState {
+  assertValidLevelDef(level);
   const initialFrame: Frame = { x: level.spawn.x, y: level.spawn.y, angle: 0 };
   return {
-    levelIndex: safeIdx,
+    levelIndex,
+    ...(attachLevelDef ? { levelDef: level } : {}),
     lap: 0,
     t: 0,
     player: {
@@ -96,11 +154,189 @@ export function createInitialState(levelIndex: number): SimState {
 }
 
 export function getLevel(state: SimState): LevelDef {
-  return LEVELS[state.levelIndex];
+  return state.levelDef ?? LEVELS[state.levelIndex];
 }
 
 export function dist(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(ax - bx, ay - by);
+}
+
+/**
+ * D8 deterministic ping-pong interpolation factor u(t) in [0, 1] (0 at A, 1 at B).
+ */
+export function getMovingLaserFactor(
+  periodFrames: number,
+  phaseOffsetFrames: number,
+  t: number
+): number {
+  const q = ((t + phaseOffsetFrames) % periodFrames + periodFrames) % periodFrames;
+  return 1 - Math.abs((2 * q) / periodFrames - 1);
+}
+
+/**
+ * Evaluates effective moving laser beam endpoints (x1, y1) -> (x2, y2) at frame t.
+ */
+export function getMovingLaserEndpoints(
+  ml: MovingLaser,
+  t: number
+): { x1: number; y1: number; x2: number; y2: number; u: number } {
+  const u = getMovingLaserFactor(ml.periodFrames, ml.phaseOffsetFrames, t);
+  const ax = ml.pointA.x + (ml.pointB.x - ml.pointA.x) * u;
+  const ay = ml.pointA.y + (ml.pointB.y - ml.pointA.y) * u;
+
+  if (ml.beamEndA && ml.beamEndB) {
+    const bx = ml.beamEndA.x + (ml.beamEndB.x - ml.beamEndA.x) * u;
+    const by = ml.beamEndA.y + (ml.beamEndB.y - ml.beamEndA.y) * u;
+    return { x1: ax, y1: ay, x2: bx, y2: by, u };
+  }
+
+  if (ml.beamOffset) {
+    return {
+      x1: ax,
+      y1: ay,
+      x2: ax + ml.beamOffset.x,
+      y2: ay + ml.beamOffset.y,
+      u,
+    };
+  }
+
+  return { x1: ml.pointA.x, y1: ml.pointA.y, x2: ax, y2: ay, u };
+}
+
+/**
+ * Pure deterministic evaluator for ordered switches, global sequence state, and laserSegments (D2, D3, D4).
+ * Evaluates outside->inside transitions strictly from active player's chronological recorded frames
+ * across past laps and the current lap up to t (so rewind/seek and cross-lap progress remain 100% deterministic).
+ */
+export function evaluateOrderedSequence(
+  level: LevelDef,
+  currentFrames: readonly Frame[],
+  dead = false,
+  pastLaps: ReadonlyArray<readonly Frame[]> = []
+): DerivedSequenceState {
+  const segmentEnabled: Record<string, boolean> = {};
+  const segmentInitial = new Map<string, boolean>();
+  for (const seg of level.laserSegments ?? []) {
+    segmentEnabled[seg.id] = seg.initialEnabled;
+    segmentInitial.set(seg.id, seg.initialEnabled);
+  }
+
+  const seq = level.orderedSwitchSequence;
+  if (!seq || seq.switches.length === 0) {
+    return {
+      present: false,
+      currentStep: 0,
+      expectedOrder: null,
+      totalSteps: 0,
+      completed: false,
+      errorCount: 0,
+      hasRecentError: false,
+      lastErrorTick: null,
+      lastErrorSwitchId: null,
+      switches: [],
+      segmentEnabled,
+    };
+  }
+
+  const sortedSwitches = [...seq.switches].sort((a, b) => a.order - b.order);
+  const totalSteps = sortedSwitches.length;
+
+  let currentStep = 0;
+  let completed = false;
+  let errorCount = 0;
+  let lastErrorTick: number | null = null;
+  let lastErrorSwitchId: string | null = null;
+  let lastEventType: 'advance' | 'complete' | 'error' | null = null;
+
+  const restoreControlledSegments = () => {
+    for (const swItem of sortedSwitches) {
+      for (const segId of swItem.targetSegmentIds) {
+        const init = segmentInitial.get(segId);
+        if (init !== undefined) {
+          segmentEnabled[segId] = init;
+        }
+      }
+    }
+  };
+
+  const recordedLaps: ReadonlyArray<readonly Frame[]> = [...pastLaps, currentFrames];
+  for (let lapIdx = 0; lapIdx < recordedLaps.length; lapIdx++) {
+    const frames = recordedLaps[lapIdx];
+    for (let i = 1; i < frames.length; i++) {
+      const prev = frames[i - 1];
+      const cur = frames[i];
+
+      for (const sw of sortedSwitches) {
+        const threshold = sw.r + SWITCH_ACTIVATION_MARGIN;
+        const wasInside = dist(prev.x, prev.y, sw.x, sw.y) <= threshold;
+        const isInside = dist(cur.x, cur.y, sw.x, sw.y) <= threshold;
+
+        if (!wasInside && isInside) {
+          if (!completed && sw.order === currentStep + 1) {
+            currentStep += 1;
+            if (currentStep === totalSteps) {
+              completed = true;
+              lastEventType = 'complete';
+              for (const swItem of sortedSwitches) {
+                for (const segId of swItem.targetSegmentIds) {
+                  if (segmentInitial.has(segId)) {
+                    segmentEnabled[segId] = swItem.effect === 'enable';
+                  }
+                }
+              }
+            } else {
+              lastEventType = 'advance';
+            }
+          } else {
+            currentStep = 0;
+            completed = false;
+            errorCount += 1;
+            lastErrorTick = i;
+            lastErrorSwitchId = sw.id;
+            lastEventType = 'error';
+            restoreControlledSegments();
+          }
+        }
+      }
+    }
+  }
+
+  const expectedOrder = completed ? null : currentStep + 1;
+  const lastFrame = currentFrames.length > 0 ? currentFrames[currentFrames.length - 1] : null;
+
+  const derivedSwitches: DerivedOrderedSwitch[] = sortedSwitches.map((sw) => {
+    const threshold = sw.r + SWITCH_ACTIVATION_MARGIN;
+    const playerInside = Boolean(
+      !dead && lastFrame && dist(lastFrame.x, lastFrame.y, sw.x, sw.y) <= threshold
+    );
+    return {
+      id: sw.id,
+      label: sw.label,
+      x: sw.x,
+      y: sw.y,
+      r: sw.r,
+      order: sw.order,
+      targetSegmentIds: sw.targetSegmentIds,
+      effect: sw.effect,
+      activated: completed || sw.order <= currentStep,
+      isExpected: !completed && sw.order === expectedOrder,
+      playerInside,
+    };
+  });
+
+  return {
+    present: true,
+    currentStep,
+    expectedOrder,
+    totalSteps,
+    completed,
+    errorCount,
+    hasRecentError: lastEventType === 'error',
+    lastErrorTick,
+    lastErrorSwitchId,
+    switches: derivedSwitches,
+    segmentEnabled,
+  };
 }
 
 export function getActiveGhosts(state: SimState, atT = state.t): GhostEntity[] {
@@ -178,49 +414,222 @@ export function deriveWorld(state: SimState): DerivedWorld {
     if (allPressed) openDoors.add(door.id);
   }
 
-  const lasers: ActiveLaserSegment[] = [];
+  const sequence = evaluateOrderedSequence(level, state.current, state.dead, state.laps);
+
+  const baseLasers: Array<{
+    id: string;
+    isMoving: boolean;
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    powered: boolean;
+  }> = [];
+
   for (const laser of level.lasers) {
-    const active =
+    const powered =
       !laser.poweredByPlates ||
       laser.poweredByPlates.length === 0 ||
       laser.poweredByPlates.every((pId) => pressedPlates.has(pId));
+    baseLasers.push({
+      id: laser.id,
+      isMoving: false,
+      x1: laser.x1,
+      y1: laser.y1,
+      x2: laser.x2,
+      y2: laser.y2,
+      powered,
+    });
+  }
 
-    if (!active) {
-      lasers.push({
-        id: laser.id,
-        active: false,
-        x1: laser.x1,
-        y1: laser.y1,
-        x2: laser.x2,
-        y2: laser.y2,
-        blockedByLap: null,
-      });
-      continue;
-    }
+  for (const ml of level.movingLasers ?? []) {
+    const powered =
+      !ml.poweredByPlates ||
+      ml.poweredByPlates.length === 0 ||
+      ml.poweredByPlates.every((pId) => pressedPlates.has(pId));
+    const geom = getMovingLaserEndpoints(ml, state.t);
+    baseLasers.push({
+      id: ml.id,
+      isMoving: true,
+      x1: geom.x1,
+      y1: geom.y1,
+      x2: geom.x2,
+      y2: geom.y2,
+      powered,
+    });
+  }
 
-    let bestT = 1;
-    let blockedByLap: number | null = null;
-    for (const g of ghosts) {
-      const hit = closestPointOnSegment(g.x, g.y, laser.x1, laser.y1, laser.x2, laser.y2);
-      if (hit.dist <= PLAYER_RADIUS + LASER_BEAM_HALF_WIDTH) {
-        if (hit.t < bestT) {
+  const segmentsByLaser = new Map<string, NonNullable<LevelDef['laserSegments']>>();
+  for (const seg of level.laserSegments ?? []) {
+    const list = segmentsByLaser.get(seg.laserId) ?? [];
+    list.push(seg);
+    segmentsByLaser.set(seg.laserId, list);
+  }
+
+  const lasers: ActiveLaserSegment[] = [];
+  for (const base of baseLasers) {
+    const attachedSegments = segmentsByLaser.get(base.id);
+
+    if (!attachedSegments || attachedSegments.length === 0) {
+      // Implicit single full segment (0..1) preserving existing static laser contract
+      if (!base.powered) {
+        lasers.push({
+          id: base.id,
+          laserId: base.id,
+          segmentId: null,
+          isMoving: base.isMoving,
+          powered: false,
+          enabled: true,
+          active: false,
+          x1: base.x1,
+          y1: base.y1,
+          x2: base.x2,
+          y2: base.y2,
+          fullX2: base.x2,
+          fullY2: base.y2,
+          blockedByLap: null,
+        });
+        continue;
+      }
+
+      let bestT = 1;
+      let blockedByLap: number | null = null;
+      for (const g of ghosts) {
+        const hit = closestPointOnSegment(g.x, g.y, base.x1, base.y1, base.x2, base.y2);
+        if (hit.dist <= PLAYER_RADIUS + LASER_BEAM_HALF_WIDTH && hit.t < bestT) {
           bestT = hit.t;
           blockedByLap = g.lapIndex;
         }
       }
+
+      const endX = base.x1 + (base.x2 - base.x1) * bestT;
+      const endY = base.y1 + (base.y2 - base.y1) * bestT;
+      lasers.push({
+        id: base.id,
+        laserId: base.id,
+        segmentId: null,
+        isMoving: base.isMoving,
+        powered: true,
+        enabled: true,
+        active: true,
+        x1: base.x1,
+        y1: base.y1,
+        x2: endX,
+        y2: endY,
+        fullX2: base.x2,
+        fullY2: base.y2,
+        blockedByLap,
+      });
+      continue;
     }
 
-    const endX = laser.x1 + (laser.x2 - laser.x1) * bestT;
-    const endY = laser.y1 + (laser.y2 - laser.y1) * bestT;
-    lasers.push({
-      id: laser.id,
-      active: true,
-      x1: laser.x1,
-      y1: laser.y1,
-      x2: endX,
-      y2: endY,
-      blockedByLap,
-    });
+    // Explicit laserSegment entities ordered along beam [0..1]
+    const orderedSegs = [...attachedSegments].sort((a, b) => a.range.start - b.range.start);
+    let upstreamBlockedLap: number | null = null;
+
+    for (const seg of orderedSegs) {
+      const sx1 = base.x1 + (base.x2 - base.x1) * seg.range.start;
+      const sy1 = base.y1 + (base.y2 - base.y1) * seg.range.start;
+      const sx2 = base.x1 + (base.x2 - base.x1) * seg.range.end;
+      const sy2 = base.y1 + (base.y2 - base.y1) * seg.range.end;
+      const enabled = sequence.segmentEnabled[seg.id] ?? seg.initialEnabled;
+
+      // Precedence 1: poweredByPlates off -> totally inactive
+      if (!base.powered) {
+        lasers.push({
+          id: seg.id,
+          laserId: base.id,
+          segmentId: seg.id,
+          isMoving: base.isMoving,
+          powered: false,
+          enabled,
+          active: false,
+          x1: sx1,
+          y1: sy1,
+          x2: sx2,
+          y2: sy2,
+          fullX2: sx2,
+          fullY2: sy2,
+          blockedByLap: null,
+        });
+        continue;
+      }
+
+      // Precedence 2: disabled by sequence/segment -> non-harmful (opens path)
+      if (!enabled) {
+        lasers.push({
+          id: seg.id,
+          laserId: base.id,
+          segmentId: seg.id,
+          isMoving: base.isMoving,
+          powered: true,
+          enabled: false,
+          active: false,
+          x1: sx1,
+          y1: sy1,
+          x2: sx2,
+          y2: sy2,
+          fullX2: sx2,
+          fullY2: sy2,
+          blockedByLap: null,
+        });
+        continue;
+      }
+
+      // Precedence 3: upstream enabled segment already blocked by a ghost
+      if (upstreamBlockedLap !== null) {
+        lasers.push({
+          id: seg.id,
+          laserId: base.id,
+          segmentId: seg.id,
+          isMoving: base.isMoving,
+          powered: true,
+          enabled: true,
+          active: false,
+          x1: sx1,
+          y1: sy1,
+          x2: sx1,
+          y2: sy1,
+          fullX2: sx2,
+          fullY2: sy2,
+          blockedByLap: upstreamBlockedLap,
+        });
+        continue;
+      }
+
+      // Precedence 3/4: check ghost blocking along this active segment
+      let bestT = 1;
+      let blockedByLap: number | null = null;
+      for (const g of ghosts) {
+        const hit = closestPointOnSegment(g.x, g.y, sx1, sy1, sx2, sy2);
+        if (hit.dist <= PLAYER_RADIUS + LASER_BEAM_HALF_WIDTH && hit.t < bestT) {
+          bestT = hit.t;
+          blockedByLap = g.lapIndex;
+        }
+      }
+      if (blockedByLap !== null) {
+        upstreamBlockedLap = blockedByLap;
+      }
+
+      const endX = sx1 + (sx2 - sx1) * bestT;
+      const endY = sy1 + (sy2 - sy1) * bestT;
+      lasers.push({
+        id: seg.id,
+        laserId: base.id,
+        segmentId: seg.id,
+        isMoving: base.isMoving,
+        powered: true,
+        enabled: true,
+        active: true,
+        x1: sx1,
+        y1: sy1,
+        x2: endX,
+        y2: endY,
+        fullX2: sx2,
+        fullY2: sy2,
+        blockedByLap,
+      });
+    }
   }
 
   const won =
@@ -228,7 +637,7 @@ export function deriveWorld(state: SimState): DerivedWorld {
     dist(state.player.x, state.player.y, level.goal.x, level.goal.y) <=
       state.player.r + level.goal.r;
 
-  return { level, ghosts, pressedPlates, openDoors, lasers, won };
+  return { level, ghosts, pressedPlates, openDoors, lasers, sequence, won };
 }
 
 export function isWon(state: SimState): boolean {
@@ -504,12 +913,19 @@ export function stepSim(state: SimState, input: InputState): SimState {
     };
   }
 
-  // 5. Check active lasers at new position
+  // 5. Check active lasers (with new player frame included so switch deactivation takes effect immediately)
+  const recordedCurrent = state.current.slice(0, state.t + 1);
+  recordedCurrent.push({ x: resolved.x, y: resolved.y, angle });
+
   const nextPlayerState: SimState = {
     ...state,
     player: { ...state.player, x: resolved.x, y: resolved.y, angle },
   };
-  const postWorld = deriveWorld(nextPlayerState);
+  const postWorld = deriveWorld({
+    ...nextPlayerState,
+    current: recordedCurrent,
+  });
+
   for (const laser of postWorld.lasers) {
     if (!laser.active) continue;
     const hit = closestPointOnSegment(resolved.x, resolved.y, laser.x1, laser.y1, laser.x2, laser.y2);
@@ -526,18 +942,14 @@ export function stepSim(state: SimState, input: InputState): SimState {
 
   // 6. Check goal win before advancing lap
   if (postWorld.won) {
-    const newCurrent = state.current.slice(0, state.t + 1);
-    newCurrent.push({ x: resolved.x, y: resolved.y, angle });
     return {
       ...nextPlayerState,
-      current: newCurrent,
+      current: recordedCurrent,
     };
   }
 
   // 7. Advance frame / handle lap transition
   const nextT = state.t + 1;
-  const recordedCurrent = state.current.slice(0, state.t + 1);
-  recordedCurrent.push({ x: resolved.x, y: resolved.y, angle });
 
   if (nextT >= FRAMES_PER_LAP) {
     if (state.lap + 1 < level.maxLaps) {

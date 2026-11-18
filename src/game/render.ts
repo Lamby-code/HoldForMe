@@ -1,10 +1,12 @@
-import { COLORS, getLapColor } from './colors.ts';
+import { COLORS, getLapCode, getLapColor } from './colors.ts';
 import { CANVAS_H, CANVAS_W } from './levels.ts';
 import {
   deriveWorld,
   getFutureGhostFrame,
+  getMovingLaserEndpoints,
   PLAYER_RADIUS,
   SPAWN_SAFE_RADIUS,
+  SWITCH_ACTIVATION_MARGIN,
   TICK_HZ,
   TRAIL_HALF_WIDTH,
   TRAIL_SAMPLE_INTERVAL,
@@ -126,7 +128,7 @@ export function renderGame(
       const plate = level.plates.find((p) => p.id === pId);
       if (!plate) continue;
       const active = pressedPlates.has(pId);
-      ctx.strokeStyle = active ? 'rgba(142, 202, 230, 0.5)' : 'rgba(142, 202, 230, 0.16)';
+      ctx.strokeStyle = active ? 'rgba(142, 202, 230, 0.55)' : 'rgba(142, 202, 230, 0.16)';
       ctx.beginPath();
       ctx.moveTo(plate.x, plate.y);
       ctx.lineTo(dcx, dcy);
@@ -141,7 +143,23 @@ export function renderGame(
       const plate = level.plates.find((p) => p.id === pId);
       if (!plate) continue;
       const active = pressedPlates.has(pId);
-      ctx.strokeStyle = active ? 'rgba(255, 59, 59, 0.45)' : 'rgba(255, 59, 59, 0.16)';
+      ctx.strokeStyle = active ? 'rgba(255, 59, 59, 0.5)' : 'rgba(255, 59, 59, 0.16)';
+      ctx.beginPath();
+      ctx.moveTo(plate.x, plate.y);
+      ctx.lineTo(lcx, lcy);
+      ctx.stroke();
+    }
+  }
+  for (const ml of level.movingLasers ?? []) {
+    if (!ml.poweredByPlates) continue;
+    const geom = getMovingLaserEndpoints(ml, state.t);
+    const lcx = (geom.x1 + geom.x2) * 0.5;
+    const lcy = (geom.y1 + geom.y2) * 0.5;
+    for (const pId of ml.poweredByPlates) {
+      const plate = level.plates.find((p) => p.id === pId);
+      if (!plate) continue;
+      const active = pressedPlates.has(pId);
+      ctx.strokeStyle = active ? 'rgba(255, 59, 59, 0.5)' : 'rgba(255, 59, 59, 0.16)';
       ctx.beginPath();
       ctx.moveTo(plate.x, plate.y);
       ctx.lineTo(lcx, lcy);
@@ -165,7 +183,7 @@ export function renderGame(
   ctx.arc(level.spawn.x, level.spawn.y, SPAWN_SAFE_RADIUS - 4, 0, Math.PI * 2);
   ctx.stroke();
   ctx.setLineDash([]);
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
   ctx.font = '600 10px "Plus Jakarta Sans", sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('INICIO', level.spawn.x, level.spawn.y + SPAWN_SAFE_RADIUS + 10);
@@ -175,9 +193,17 @@ export function renderGame(
   for (const plate of level.plates) {
     const pressed = pressedPlates.has(plate.id);
     ctx.save();
+    if (pressed) {
+      ctx.beginPath();
+      ctx.arc(plate.x, plate.y, plate.r + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
     ctx.beginPath();
     ctx.arc(plate.x, plate.y, plate.r, 0, Math.PI * 2);
-    ctx.fillStyle = pressed ? 'rgba(142, 202, 230, 0.32)' : 'rgba(142, 202, 230, 0.08)';
+    ctx.fillStyle = pressed ? 'rgba(142, 202, 230, 0.36)' : 'rgba(142, 202, 230, 0.08)';
     ctx.fill();
     ctx.lineWidth = pressed ? 2.5 : 1.5;
     ctx.strokeStyle = pressed ? COLORS.plateActive : COLORS.plate;
@@ -195,6 +221,58 @@ export function renderGame(
     ctx.textBaseline = 'middle';
     ctx.fillText(plate.label, plate.x, plate.y);
     ctx.restore();
+  }
+
+  // 5b. Ordered Switches (distinct diamond pad with order & sequence state)
+  if (world.sequence.present) {
+    for (const sw of world.sequence.switches) {
+      const isErr = world.sequence.hasRecentError;
+      const strokeColor = isErr
+        ? COLORS.laser
+        : sw.activated
+          ? '#80ed99'
+          : sw.isExpected
+            ? '#ffd166'
+            : 'rgba(255, 209, 102, 0.45)';
+      const fillColor = isErr
+        ? 'rgba(255, 59, 59, 0.18)'
+        : sw.activated
+          ? 'rgba(128, 237, 153, 0.28)'
+          : sw.isExpected
+            ? 'rgba(255, 209, 102, 0.18)'
+            : 'rgba(255, 209, 102, 0.06)';
+
+      ctx.save();
+      if (sw.isExpected || sw.playerInside) {
+        ctx.beginPath();
+        ctx.arc(sw.x, sw.y, sw.r + SWITCH_ACTIVATION_MARGIN, 0, Math.PI * 2);
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = sw.playerInside ? 'rgba(255, 255, 255, 0.5)' : 'rgba(255, 209, 102, 0.55)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Diamond body
+      ctx.beginPath();
+      ctx.moveTo(sw.x, sw.y - sw.r);
+      ctx.lineTo(sw.x + sw.r, sw.y);
+      ctx.lineTo(sw.x, sw.y + sw.r);
+      ctx.lineTo(sw.x - sw.r, sw.y);
+      ctx.closePath();
+      ctx.fillStyle = fillColor;
+      ctx.fill();
+      ctx.lineWidth = sw.activated || sw.isExpected ? 2.5 : 1.5;
+      ctx.strokeStyle = strokeColor;
+      ctx.stroke();
+
+      ctx.fillStyle = sw.activated ? '#80ed99' : sw.isExpected ? '#ffffff' : '#cbd5e1';
+      ctx.font = '700 11px "JetBrains Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`#${sw.order}`, sw.x, sw.y);
+      ctx.restore();
+    }
   }
 
   // 6. Goal
@@ -225,11 +303,17 @@ export function renderGame(
     if (isOpen) {
       ctx.fillStyle = COLORS.doorOpen;
       ctx.fillRect(door.x, door.y, door.w, door.h);
-      ctx.strokeStyle = 'rgba(142, 202, 230, 0.45)';
+      ctx.strokeStyle = 'rgba(142, 202, 230, 0.5)';
       ctx.setLineDash([4, 4]);
       ctx.lineWidth = 1.5;
       ctx.strokeRect(door.x + 1, door.y + 1, door.w - 2, door.h - 2);
       ctx.setLineDash([]);
+
+      ctx.fillStyle = 'rgba(142, 202, 230, 0.7)';
+      ctx.font = '600 9px "JetBrains Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(door.id, door.x + door.w * 0.5, door.y + door.h * 0.5);
     } else {
       ctx.fillStyle = COLORS.doorClosed;
       ctx.fillRect(door.x, door.y, door.w, door.h);
@@ -258,69 +342,179 @@ export function renderGame(
   }
   ctx.restore();
 
-  // 9. Lasers
-  for (const laserDef of level.lasers) {
-    const seg = lasers.find((l) => l.id === laserDef.id);
-    if (!seg) continue;
+  // 9. Lasers & Moving Lasers (with LaserSegment support)
+  for (const ml of level.movingLasers ?? []) {
+    ctx.save();
+    // Linear A <-> B rail guide for emitter
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(ml.pointA.x, ml.pointA.y);
+    ctx.lineTo(ml.pointB.x, ml.pointB.y);
+    ctx.stroke();
+
+    if (ml.beamEndA && ml.beamEndB) {
+      ctx.beginPath();
+      ctx.moveTo(ml.beamEndA.x, ml.beamEndA.y);
+      ctx.lineTo(ml.beamEndB.x, ml.beamEndB.y);
+      ctx.stroke();
+    } else if (ml.beamOffset) {
+      ctx.beginPath();
+      ctx.moveTo(ml.pointA.x + ml.beamOffset.x, ml.pointA.y + ml.beamOffset.y);
+      ctx.lineTo(ml.pointB.x + ml.beamOffset.x, ml.pointB.y + ml.beamOffset.y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Anchor nodes A & B
+    ctx.fillStyle = '#475569';
+    ctx.beginPath();
+    ctx.arc(ml.pointA.x, ml.pointA.y, 3.5, 0, Math.PI * 2);
+    ctx.arc(ml.pointB.x, ml.pointB.y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  const baseLasers: Array<{
+    id: string;
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    isMoving: boolean;
+  }> = [
+    ...level.lasers.map((l) => ({
+      id: l.id,
+      x1: l.x1,
+      y1: l.y1,
+      x2: l.x2,
+      y2: l.y2,
+      isMoving: false,
+    })),
+    ...(level.movingLasers ?? []).map((ml) => {
+      const geom = getMovingLaserEndpoints(ml, state.t);
+      return {
+        id: ml.id,
+        x1: geom.x1,
+        y1: geom.y1,
+        x2: geom.x2,
+        y2: geom.y2,
+        isMoving: true,
+      };
+    }),
+  ];
+
+  for (const base of baseLasers) {
+    const segs = lasers.filter((l) => l.laserId === base.id);
+    if (segs.length === 0) continue;
+    const anyActive = segs.some((s) => s.active);
 
     ctx.save();
     // Emitter turret & receiver sockets
     ctx.fillStyle = '#252a32';
-    ctx.strokeStyle = seg.active ? COLORS.laser : '#64748b';
+    ctx.strokeStyle = anyActive ? COLORS.laser : '#64748b';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(laserDef.x1, laserDef.y1, 8, 0, Math.PI * 2);
+    ctx.arc(base.x1, base.y1, 8, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+
+    if (base.isMoving) {
+      ctx.beginPath();
+      ctx.arc(base.x1, base.y1, 3, 0, Math.PI * 2);
+      ctx.fillStyle = anyActive ? '#fca5a5' : '#94a3b8';
+      ctx.fill();
+      ctx.fillStyle = '#252a32';
+    }
 
     ctx.beginPath();
-    ctx.arc(laserDef.x2, laserDef.y2, 6, 0, Math.PI * 2);
+    ctx.arc(base.x2, base.y2, 6, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
-    if (!seg.active) {
-      // Standby dotted line so player sees where the beam will fire
-      ctx.setLineDash([4, 6]);
-      ctx.strokeStyle = COLORS.laserDim;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(laserDef.x1, laserDef.y1);
-      ctx.lineTo(laserDef.x2, laserDef.y2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    } else {
-      // Active deadly beam glow + core
-      ctx.strokeStyle = 'rgba(255, 59, 59, 0.35)';
-      ctx.lineWidth = 10;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(seg.x1, seg.y1);
-      ctx.lineTo(seg.x2, seg.y2);
-      ctx.stroke();
+    // Subtle laser identifier next to emitter
+    ctx.fillStyle = anyActive ? '#fca5a5' : '#94a3b8';
+    ctx.font = '700 10px "JetBrains Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(base.id, base.x1 - 12, base.y1);
 
-      ctx.strokeStyle = COLORS.laser;
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(seg.x1, seg.y1);
-      ctx.lineTo(seg.x2, seg.y2);
-      ctx.stroke();
-
-      ctx.strokeStyle = '#ffd6d6';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(seg.x1, seg.y1);
-      ctx.lineTo(seg.x2, seg.y2);
-      ctx.stroke();
-
-      // Impact ring if blocked by ghost
-      if (seg.blockedByLap !== null) {
-        ctx.fillStyle = '#ffffff';
-        ctx.strokeStyle = COLORS.laser;
+    for (const seg of segs) {
+      if (!seg.powered) {
+        // Standby dotted line so player sees where unpowered beam will fire
+        ctx.setLineDash([4, 6]);
+        ctx.strokeStyle = COLORS.laserDim;
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(seg.x2, seg.y2, 5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(seg.x1, seg.y1);
+        ctx.lineTo(seg.fullX2, seg.fullY2);
         ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (!seg.enabled) {
+        // Disabled by ordered switch sequence: open safe passage cue
+        ctx.setLineDash([3, 6]);
+        ctx.strokeStyle = 'rgba(128, 237, 153, 0.38)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(seg.x1, seg.y1);
+        ctx.lineTo(seg.fullX2, seg.fullY2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (!seg.active && seg.blockedByLap !== null) {
+        // Occluded downstream by an upstream ghost block
+        ctx.setLineDash([3, 6]);
+        ctx.strokeStyle = 'rgba(255, 59, 59, 0.16)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(seg.x1, seg.y1);
+        ctx.lineTo(seg.fullX2, seg.fullY2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (seg.active) {
+        // Active deadly beam glow + core
+        ctx.strokeStyle = 'rgba(255, 59, 59, 0.35)';
+        ctx.lineWidth = 10;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(seg.x1, seg.y1);
+        ctx.lineTo(seg.x2, seg.y2);
+        ctx.stroke();
+
+        ctx.strokeStyle = COLORS.laser;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(seg.x1, seg.y1);
+        ctx.lineTo(seg.x2, seg.y2);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#ffd6d6';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(seg.x1, seg.y1);
+        ctx.lineTo(seg.x2, seg.y2);
+        ctx.stroke();
+
+        // Impact ring & faint occluded remainder if blocked by ghost
+        if (seg.blockedByLap !== null) {
+          ctx.setLineDash([3, 6]);
+          ctx.strokeStyle = 'rgba(255, 59, 59, 0.18)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(seg.x2, seg.y2);
+          ctx.lineTo(seg.fullX2, seg.fullY2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          const blockerColor = getLapColor(seg.blockedByLap);
+          ctx.fillStyle = '#ffffff';
+          ctx.strokeStyle = blockerColor;
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.arc(seg.x2, seg.y2, 5.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
       }
     }
     ctx.restore();
@@ -402,12 +596,12 @@ export function renderGame(
     ctx.fillStyle = '#0f1115';
     ctx.fill();
 
-    // Lap number badge
+    // Lap code badge (1–6)
     ctx.fillStyle = '#0f1115';
     ctx.font = '700 10px "JetBrains Mono", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(g.lapIndex + 1), g.x, g.y + 0.5);
+    ctx.fillText(getLapCode(g.lapIndex), g.x, g.y + 0.5);
     ctx.restore();
   }
 
@@ -447,9 +641,9 @@ export function renderGame(
     ctx.restore();
   } else if (options.isPaused && !state.dead && !world.won) {
     ctx.save();
-    ctx.fillStyle = 'rgba(20, 22, 26, 0.28)';
+    ctx.fillStyle = 'rgba(20, 22, 26, 0.36)';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    ctx.fillStyle = 'rgba(241, 245, 249, 0.9)';
+    ctx.fillStyle = 'rgba(241, 245, 249, 0.95)';
     ctx.font = '600 13px "Plus Jakarta Sans", sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('PAUSA — Presioná Espacio para continuar', CANVAS_W * 0.5, 48);
