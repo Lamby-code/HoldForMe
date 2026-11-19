@@ -60,13 +60,18 @@ function runTicks(state: SimState, ticks: number, inputFn: (s: SimState) => Inpu
   return cur;
 }
 
-test('Canvas is 960x400 and all built-in levels (N1-N7) pass O1 validation', () => {
+test('Canvas is 960x400 and all 10 campaign levels (N1-N10) pass O1 validation with N10 as unique 6-lap capstone', () => {
   assert.equal(CANVAS_W, 960);
   assert.equal(CANVAS_H, 400);
-  assert.equal(LEVELS.length, 7);
-  for (const level of LEVELS) {
-    assert.deepEqual(validateLevelDef(level), []);
+  assert.equal(LEVELS.length, 10);
+  for (let i = 0; i < LEVELS.length; i++) {
+    assert.equal(LEVELS[i].id, i + 1);
+    assert.deepEqual(validateLevelDef(LEVELS[i]), []);
   }
+  const sixLapLevels = LEVELS.filter((l) => l.maxLaps === 6);
+  assert.equal(sixLapLevels.length, 1);
+  assert.equal(sixLapLevels[0].id, 10);
+
   assert.equal(LEVELS[3].maxLaps, 3);
   assert.equal(LEVELS[4].maxLaps, 3);
   assert.equal(LEVELS[4].movingLasers?.length, 1);
@@ -79,6 +84,27 @@ test('Canvas is 960x400 and all built-in levels (N1-N7) pass O1 validation', () 
   assert.equal(LEVELS[6].movingLasers?.length, 1);
   assert.equal(LEVELS[6].orderedSwitchSequence?.switches.length, 3);
   assert.equal(LEVELS[6].laserSegments?.length, 2);
+
+  // N8: 5 laps, 2 switches, 1 segment, 1 moving laser
+  assert.equal(LEVELS[7].maxLaps, 5);
+  assert.equal(LEVELS[7].movingLasers?.length, 1);
+  assert.equal(LEVELS[7].orderedSwitchSequence?.switches.length, 2);
+  assert.equal(LEVELS[7].laserSegments?.length, 1);
+
+  // N9: 5 laps, 3 switches, 2 segments, 1 moving laser
+  assert.equal(LEVELS[8].maxLaps, 5);
+  assert.equal(LEVELS[8].movingLasers?.length, 1);
+  assert.equal(LEVELS[8].orderedSwitchSequence?.switches.length, 3);
+  assert.equal(LEVELS[8].laserSegments?.length, 2);
+
+  // N10: 6 laps (unique), 2 plates, 2 doors, 1 moving + 1 static laser, 3 switches, 2 segments
+  assert.equal(LEVELS[9].maxLaps, 6);
+  assert.equal(LEVELS[9].plates.length, 2);
+  assert.equal(LEVELS[9].doors.length, 2);
+  assert.equal(LEVELS[9].lasers.length, 1);
+  assert.equal(LEVELS[9].movingLasers?.length, 1);
+  assert.equal(LEVELS[9].orderedSwitchSequence?.switches.length, 3);
+  assert.equal(LEVELS[9].laserSegments?.length, 2);
 });
 
 test('Level 1 (Caminar) can be solved in 1 lap on 960x400', () => {
@@ -1228,4 +1254,357 @@ test('Level 7 fails on out-of-order switch error and on unblocked moving laser M
   sNoBlock = walkTo(sNoBlock, 820, 186, 170);
   assert.equal(sNoBlock.dead, true);
   assert.equal(sNoBlock.cause, 'laser');
+});
+
+test('Level 8 (La herradura) solves deterministically in 5 laps (V1-V5) around the central spine with moving laser and 2-floor switches', () => {
+  let s = createInitialState(7); // Level 8
+
+  // V1: straight UP then right to Plate A (216, 56) to open D1
+  s = walkTo(s, 96, 56, 20);
+  s = walkTo(s, 216, 56, 40);
+  assert.equal(deriveWorld(s).pressedPlates.has('A'), true);
+  assert.equal(deriveWorld(s).openDoors.has('D1'), true);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 1);
+
+  // V2: DOWN-RIGHT through open D1 -> S1 (520, 88) -> progress 1/2
+  s = runTicks(s, 65, () => IDLE);
+  s = walkTo(s, 124, 116, 18);
+  s = walkTo(s, 420, 116, 86);
+  s = walkTo(s, 520, 88, 34);
+  const wV2 = deriveWorld(s);
+  assert.equal(wV2.sequence.currentStep, 1);
+  assert.equal(wV2.sequence.expectedOrder, 2);
+  assert.equal(wV2.sequence.completed, false);
+  assert.equal(wV2.sequence.segmentEnabled.SEG1, true);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 2);
+
+  // V3 (middle U-turn ring x=792): straight DOWN -> y=144 -> time ML1 -> drop to y=300 -> S2 (496, 300) disables SEG1
+  s = runTicks(s, 120, () => IDLE);
+  s = walkTo(s, 96, 144, 24);
+  s = walkTo(s, 712, 144, 180);
+  s = runTicks(s, (25 - (s.t % 180) + 180) % 180, () => IDLE);
+  s = walkTo(s, 792, 144, 24);
+  s = walkTo(s, 792, 300, 46);
+  s = walkTo(s, 712, 300, 24);
+  s = walkTo(s, 496, 300, 66);
+  const wV3 = deriveWorld(s);
+  assert.equal(wV3.sequence.currentStep, 2);
+  assert.equal(wV3.sequence.completed, true);
+  assert.equal(wV3.sequence.segmentEnabled.SEG1, false);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 3);
+
+  // V4 (outer U-turn ring x=828): straight RIGHT -> y=56 above S1 -> drop at x=828 to y=336 -> hold Plate B (612, 336)
+  s = runTicks(s, 150, () => IDLE);
+  s = walkTo(s, 416, 88, 95);
+  s = walkTo(s, 416, 56, 14);
+  s = walkTo(s, 712, 56, 88);
+  s = walkTo(s, 712, 114, 18);
+  s = runTicks(s, (25 - (s.t % 180) + 180) % 180, () => IDLE);
+  s = walkTo(s, 828, 114, 34);
+  s = walkTo(s, 828, 336, 64);
+  s = walkTo(s, 712, 336, 34);
+  s = walkTo(s, 612, 336, 32);
+  assert.equal(deriveWorld(s).pressedPlates.has('B'), true);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 4);
+
+  // V5 (inner U-turn ring x=756): exit LEFT -> y=172 -> time ML1 -> y=256 -> cross disabled L1 & open D2 -> Goal (96, 312)
+  s = runTicks(s, 180, () => IDLE);
+  s = walkTo(s, 48, 88, 22);
+  s = walkTo(s, 48, 172, 28);
+  s = walkTo(s, 712, 172, 195);
+  s = runTicks(s, (35 - (s.t % 180) + 180) % 180, () => IDLE);
+  s = walkTo(s, 756, 172, 14);
+  s = walkTo(s, 756, 256, 26);
+  s = walkTo(s, 712, 256, 14);
+  if (s.t < 580) {
+    s = runTicks(s, 580 - s.t, () => IDLE);
+  }
+  const wPreGoal = deriveWorld(s);
+  assert.equal(wPreGoal.openDoors.has('D2'), true);
+  assert.equal(wPreGoal.sequence.completed, true);
+  s = walkTo(s, 260, 256, 134);
+  s = walkTo(s, 96, 312, 54);
+  assert.equal(s.dead, false);
+  assert.equal(isWon(s), true);
+});
+
+test('Level 8 fails on out-of-order switch activation (SEG1 stays active) and on mistimed moving laser ML1 crossing', () => {
+  // Case A: hitting S2 before S1 resets sequence and L1/SEG1 stays active & kills player
+  let s = createInitialState(7);
+  s = walkTo(s, 96, 56, 20);
+  s = walkTo(s, 216, 56, 40);
+  s = finishCurrentLap(s); // V1 holds A
+  s = runTicks(s, 65, () => IDLE);
+  s = walkTo(s, 128, 120, 18);
+  s = walkTo(s, 712, 120, 175);
+  s = runTicks(s, (35 - (s.t % 180) + 180) % 180, () => IDLE);
+  s = walkTo(s, 780, 120, 23);
+  s = walkTo(s, 780, 300, 56);
+  s = walkTo(s, 712, 300, 23);
+  s = walkTo(s, 496, 300, 66); // S2 out of order!
+  const wErr = deriveWorld(s);
+  assert.equal(wErr.sequence.currentStep, 0);
+  assert.equal(wErr.sequence.hasRecentError, true);
+  assert.equal(wErr.sequence.segmentEnabled.SEG1, true);
+  s = walkTo(s, 320, 300, 55);
+  assert.equal(s.dead, true);
+  assert.equal(s.cause, 'laser');
+
+  // Case B: ignoring ML1 pendulum phase in right bay kills player
+  let sLaser = createInitialState(7);
+  sLaser = walkTo(sLaser, 96, 56, 20);
+  sLaser = walkTo(sLaser, 216, 56, 40);
+  sLaser = finishCurrentLap(sLaser); // V1 A
+  sLaser = runTicks(sLaser, 65, () => IDLE);
+  sLaser = walkTo(sLaser, 128, 120, 18);
+  sLaser = walkTo(sLaser, 900, 120, 260);
+  assert.equal(sLaser.dead, true);
+  assert.equal(sLaser.cause, 'laser');
+});
+
+test('Level 9 (Cámaras cruzadas) solves deterministically in 5 laps (V1-V5) across 3 columns with horizontal L1 and Room 3 ML1', () => {
+  let s = createInitialState(8); // Level 9
+
+  // V1: exit LEFT -> loop top-left to Plate A (120, 88) -> opens D1 and powers ML1
+  s = walkTo(s, 48, 312, 18);
+  s = walkTo(s, 48, 48, 80);
+  s = walkTo(s, 120, 48, 24);
+  s = walkTo(s, 120, 88, 16);
+  assert.equal(deriveWorld(s).pressedPlates.has('A'), true);
+  assert.equal(deriveWorld(s).openDoors.has('D1'), true);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 1);
+
+  // V2: straight UP along x=96 -> S1 (224, 88) -> progress 1/3
+  s = walkTo(s, 96, 148, 50);
+  s = walkTo(s, 224, 148, 40);
+  s = walkTo(s, 224, 88, 22);
+  const wV2 = deriveWorld(s);
+  assert.equal(wV2.sequence.currentStep, 1);
+  assert.equal(wV2.sequence.expectedOrder, 2);
+  assert.equal(wV2.sequence.completed, false);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 2);
+
+  // V3: straight RIGHT through D1 into lower Room 2 -> S2 (408, 316) -> S3 (548, 316) disables horizontal L1 (SEG_L + SEG_R)
+  s = runTicks(s, 110, () => IDLE);
+  s = walkTo(s, 408, 316, 95);
+  s = walkTo(s, 548, 316, 44);
+  const wV3 = deriveWorld(s);
+  assert.equal(wV3.sequence.currentStep, 3);
+  assert.equal(wV3.sequence.completed, true);
+  assert.equal(wV3.sequence.segmentEnabled.SEG_L, false);
+  assert.equal(wV3.sequence.segmentEnabled.SEG_R, false);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 3);
+
+  // V4: straight DOWN -> cross under V3 to x=592 -> wait L1 off -> cross up to hold Plate B (480, 88) to open D2
+  s = runTicks(s, 130, () => IDLE);
+  s = walkTo(s, 96, 356, 18);
+  s = walkTo(s, 592, 356, 146);
+  if (s.t < 255) {
+    s = runTicks(s, 255 - s.t, () => IDLE);
+  }
+  s = walkTo(s, 592, 88, 80);
+  s = walkTo(s, 480, 88, 36);
+  assert.equal(deriveWorld(s).pressedPlates.has('B'), true);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 4);
+
+  // V5: UP-RIGHT lane y=244 -> rise through disabled L1 to y=52 -> cross D2 to upper Room 3 -> drop past ML1 into Goal (880, 320)
+  s = runTicks(s, 165, () => IDLE);
+  s = walkTo(s, 164, 244, 26);
+  s = walkTo(s, 444, 244, 84);
+  if (s.t < 255) {
+    s = runTicks(s, 255 - s.t, () => IDLE);
+  }
+  s = walkTo(s, 444, 52, 60);
+  if (s.t < 400) {
+    s = runTicks(s, 400 - s.t, () => IDLE);
+  }
+  const wPreCross = deriveWorld(s);
+  assert.equal(wPreCross.openDoors.has('D2'), true);
+  assert.equal(wPreCross.sequence.completed, true);
+  s = walkTo(s, 880, 52, 128);
+  s = walkTo(s, 880, 148, 32);
+
+  // ML1 in lower Room 3: period=120, phase=30 -> sweeps x=700..880; t%120==65..115 beam stays left near x=700..775
+  const wait9 = (65 - (s.t % 120) + 120) % 120;
+  s = runTicks(s, wait9, () => IDLE);
+  s = walkTo(s, 880, 320, 56);
+  assert.equal(s.dead, false);
+  assert.equal(isWon(s), true);
+});
+
+test('Level 9 fails on out-of-order switch error and on Lap 5 timeout', () => {
+  // Case A: hitting S2 before S1 resets sequence; crossing horizontal L1 kills player
+  let s = createInitialState(8);
+  s = walkTo(s, 48, 312, 18);
+  s = walkTo(s, 48, 48, 80);
+  s = walkTo(s, 120, 48, 24);
+  s = walkTo(s, 120, 88, 16);
+  s = finishCurrentLap(s); // V1 A
+  s = runTicks(s, 100, () => IDLE);
+  s = walkTo(s, 408, 316, 95); // S2 without S1!
+  const wErr = deriveWorld(s);
+  assert.equal(wErr.sequence.currentStep, 0);
+  assert.equal(wErr.sequence.hasRecentError, true);
+  assert.equal(wErr.sequence.segmentEnabled.SEG_L, true);
+  s = walkTo(s, 408, 140, 60);
+  assert.equal(s.dead, true);
+  assert.equal(s.cause, 'laser');
+
+  // Case B: exhaust final Lap 5 without reaching Goal -> timeout loss
+  let sTimeout = createInitialState(8);
+  for (let lap = 0; lap < 4; lap++) {
+    sTimeout = finishCurrentLap(sTimeout);
+  }
+  assert.equal(sTimeout.lap, 4);
+  sTimeout = runTicks(sTimeout, FRAMES_PER_LAP, () => IDLE);
+  assert.equal(sTimeout.dead, true);
+  assert.equal(sTimeout.cause, 'timeout');
+});
+
+test('Level 10 (Última coordinación) solves deterministically in 6 laps (V1-V6) with twin wings, focal-node block, and central vault', () => {
+  let s = createInitialState(9); // Level 10
+
+  // V1: straight UP -> Plate A (180, 72) -> opens D1 and satisfies A of D2
+  s = walkTo(s, 100, 72, 42);
+  s = walkTo(s, 180, 72, 28);
+  assert.equal(deriveWorld(s).pressedPlates.has('A'), true);
+  assert.equal(deriveWorld(s).openDoors.has('D1'), true);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 1);
+
+  // V2: LEFT -> wrap bottom-left -> S1 (180, 328) -> 1/3
+  s = walkTo(s, 48, 200, 20);
+  s = walkTo(s, 48, 328, 42);
+  s = walkTo(s, 180, 328, 42);
+  const wV2 = deriveWorld(s);
+  assert.equal(wV2.sequence.currentStep, 1);
+  assert.equal(wV2.sequence.expectedOrder, 2);
+  assert.equal(wV2.sequence.completed, false);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 2);
+
+  // V3: UP-RIGHT across D1 -> S2 (420, 170) -> enter Upper Wing -> S3 (668, 74) -> 3/3 disables SEG_BOT & SEG_TOP
+  s = runTicks(s, 115, () => IDLE);
+  s = walkTo(s, 148, 152, 20);
+  s = walkTo(s, 420, 158, 82);
+  assert.equal(deriveWorld(s).sequence.currentStep, 2);
+  s = walkTo(s, 420, 74, 30);
+  s = walkTo(s, 668, 74, 74);
+  const wV3 = deriveWorld(s);
+  assert.equal(wV3.sequence.currentStep, 3);
+  assert.equal(wV3.sequence.completed, true);
+  assert.equal(wV3.sequence.segmentEnabled.SEG_BOT, false);
+  assert.equal(wV3.sequence.segmentEnabled.SEG_TOP, false);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 3);
+
+  // V4: RIGHT below S2 at y=198 -> wait L1 off -> park on ML1 converging focal node (708, 200)
+  s = runTicks(s, 145, () => IDLE);
+  s = walkTo(s, 490, 198, 115);
+  if (s.t < 325) {
+    s = runTicks(s, 325 - s.t, () => IDLE);
+  }
+  s = walkTo(s, 708, 200, 66);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 4);
+
+  // V5: DOWN -> y=264 across D1 -> wait L1 off -> drop into Lower Wing -> hold Plate B (668, 328)
+  s = runTicks(s, 180, () => IDLE);
+  s = walkTo(s, 100, 264, 24);
+  s = walkTo(s, 490, 264, 116);
+  if (s.t < 325) {
+    s = runTicks(s, 325 - s.t, () => IDLE);
+  }
+  s = walkTo(s, 536, 264, 16);
+  s = walkTo(s, 536, 328, 22);
+  s = walkTo(s, 668, 328, 42);
+  assert.equal(deriveWorld(s).pressedPlates.has('B'), true);
+  s = finishCurrentLap(s);
+  assert.equal(s.lap, 5);
+
+  // V6: DOWN-RIGHT at y=232 -> wait L1 off -> slip under focal-blocked ML1 fan -> wait D2 open -> Goal (856, 200)
+  s = runTicks(s, 210, () => IDLE);
+  s = walkTo(s, 132, 232, 16);
+  s = walkTo(s, 490, 232, 106);
+  if (s.t < 325) {
+    s = runTicks(s, 325 - s.t, () => IDLE);
+  }
+  s = walkTo(s, 708, 232, 66);
+  if (s.t < 460) {
+    s = runTicks(s, 460 - s.t, () => IDLE);
+  }
+  const wPreVault = deriveWorld(s);
+  assert.equal(wPreVault.openDoors.has('D2'), true);
+  assert.equal(wPreVault.sequence.completed, true);
+  s = walkTo(s, 804, 232, 32);
+  s = walkTo(s, 856, 200, 22);
+  assert.equal(s.dead, false);
+  assert.equal(isWon(s), true);
+});
+
+test('Level 10 fails on out-of-order switch, on unblocked focal ML1 sweep, and on Lap 6 timeout', () => {
+  // Case A: hitting S2 before S1 resets sequence and L1 kills player
+  let s = createInitialState(9);
+  s = walkTo(s, 100, 72, 42);
+  s = walkTo(s, 180, 72, 28);
+  s = finishCurrentLap(s); // V1 A
+  s = runTicks(s, 65, () => IDLE);
+  s = walkTo(s, 420, 170, 96); // S2 without S1!
+  const wErr = deriveWorld(s);
+  assert.equal(wErr.sequence.currentStep, 0);
+  assert.equal(wErr.sequence.hasRecentError, true);
+  assert.equal(wErr.sequence.segmentEnabled.SEG_BOT, true);
+  s = walkTo(s, 560, 170, 50);
+  assert.equal(s.dead, true);
+  assert.equal(s.cause, 'laser');
+
+  // Case B: complete sequence & Plate B, skip Ghost 4 focal block -> unblocked ML1 fan kills player in Central Corridor
+  let sNoBlock = createInitialState(9);
+  sNoBlock = walkTo(sNoBlock, 100, 72, 42);
+  sNoBlock = walkTo(sNoBlock, 180, 72, 28);
+  sNoBlock = finishCurrentLap(sNoBlock); // V1 A
+  sNoBlock = walkTo(sNoBlock, 48, 200, 20);
+  sNoBlock = walkTo(sNoBlock, 48, 328, 42);
+  sNoBlock = walkTo(sNoBlock, 180, 328, 42);
+  sNoBlock = finishCurrentLap(sNoBlock); // V2 S1
+  sNoBlock = runTicks(sNoBlock, 115, () => IDLE);
+  sNoBlock = walkTo(sNoBlock, 148, 152, 20);
+  sNoBlock = walkTo(sNoBlock, 420, 158, 82);
+  sNoBlock = walkTo(sNoBlock, 420, 74, 30);
+  sNoBlock = walkTo(sNoBlock, 668, 74, 74);
+  sNoBlock = finishCurrentLap(sNoBlock); // V3 S2->S3
+  sNoBlock = finishCurrentLap(sNoBlock); // V4 skipped!
+  sNoBlock = runTicks(sNoBlock, 180, () => IDLE);
+  sNoBlock = walkTo(sNoBlock, 100, 264, 24);
+  sNoBlock = walkTo(sNoBlock, 490, 264, 116);
+  if (sNoBlock.t < 325) {
+    sNoBlock = runTicks(sNoBlock, 325 - sNoBlock.t, () => IDLE);
+  }
+  sNoBlock = walkTo(sNoBlock, 536, 264, 16);
+  sNoBlock = walkTo(sNoBlock, 536, 328, 22);
+  sNoBlock = walkTo(sNoBlock, 668, 328, 42);
+  sNoBlock = finishCurrentLap(sNoBlock); // V5 B
+  sNoBlock = runTicks(sNoBlock, 380, () => IDLE);
+  sNoBlock = walkTo(sNoBlock, 490, 200, 120);
+  sNoBlock = walkTo(sNoBlock, 740, 200, 90);
+  assert.equal(sNoBlock.dead, true);
+  assert.equal(sNoBlock.cause, 'laser');
+
+  // Case C: exhaust final Lap 6 without reaching Goal -> timeout loss
+  let sTimeout = createInitialState(9);
+  for (let lap = 0; lap < 5; lap++) {
+    sTimeout = finishCurrentLap(sTimeout);
+  }
+  assert.equal(sTimeout.lap, 5);
+  sTimeout = runTicks(sTimeout, FRAMES_PER_LAP, () => IDLE);
+  assert.equal(sTimeout.dead, true);
+  assert.equal(sTimeout.cause, 'timeout');
 });

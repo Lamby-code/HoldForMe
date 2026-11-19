@@ -694,14 +694,19 @@ export default function App() {
                 >
                   <div className="w-full max-w-md rounded-xl bg-[#1c2026] border border-[#ffb703]/60 p-5 shadow-2xl">
                     <div className="text-xs font-mono tabular-nums text-[#ffb703]">
+                      {levelIndex + 1 >= LEVELS.length ? 'Campaña completada · ' : ''}
                       Nivel {level.id} resuelto · {simState.lap + 1}{' '}
                       {simState.lap === 0 ? 'vuelta' : 'vueltas'}
                     </div>
                     <h2 id="win-title" className="mt-1 text-xl font-bold text-white">
-                      ¡Nivel {level.id} completado!
+                      {levelIndex + 1 >= LEVELS.length
+                        ? '¡Última coordinación completada!'
+                        : `¡Nivel ${level.id} completado!`}
                     </h2>
                     <p className="mt-1.5 text-sm text-slate-300 leading-relaxed">
-                      El presente encontró el hueco que dejó tu historia.
+                      {levelIndex + 1 >= LEVELS.length
+                        ? `Completaste los ${LEVELS.length} niveles. El presente encontró el hueco que dejó tu historia.`
+                        : 'El presente encontró el hueco que dejó tu historia.'}
                     </p>
                     <div className="mt-4 flex flex-wrap items-center gap-3">
                       {levelIndex + 1 < LEVELS.length ? (
