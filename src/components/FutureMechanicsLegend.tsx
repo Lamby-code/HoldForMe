@@ -1,14 +1,16 @@
 import React from 'react';
-import { getLapCode } from '../game/colors.ts';
+import { getLapCode, TOKENS, withAlpha } from '../game/colors.ts';
 import type { DerivedWorld } from '../game/sim.ts';
 
 interface FutureMechanicsLegendProps {
   world: DerivedWorld;
 }
 
+const { color: C } = TOKENS;
+
 /**
- * Live HUD & legend strip for moving lasers, laserSegments, and ordered switches (D6 / RF-18).
- * Returns null on levels without these mechanics (RF-19).
+ * Live HUD & legend strip for moving lasers, laserSegments, and ordered switches (RF-13).
+ * Purely derived from simulation state with zero timers or hidden persistence.
  */
 export const FutureMechanicsLegend: React.FC<FutureMechanicsLegendProps> = ({ world }) => {
   const { level, lasers, sequence } = world;
@@ -25,85 +27,113 @@ export const FutureMechanicsLegend: React.FC<FutureMechanicsLegendProps> = ({ wo
   return (
     <section
       aria-label="Estado de secuencia y láseres móviles"
-      className="rounded-lg bg-[#1c2026] border border-[#2a303a] px-3 py-1.5 text-xs text-slate-300 flex flex-wrap items-center gap-x-3 gap-y-1.5"
+      className="rounded-[var(--radius-sm)] bg-[var(--color-surface)] border border-[var(--color-border-subtle)] px-3 py-1.5 text-xs text-[var(--color-text-muted)] flex flex-wrap items-center gap-x-3 gap-y-1.5"
     >
       {hasSwitches && (
-        <div className="inline-flex flex-wrap items-center gap-2 font-mono tabular-nums text-[11px]">
+        <div className="inline-flex flex-wrap items-center gap-2 type-numeric text-xs">
           <span
-            className={`px-1.5 py-0.5 rounded border font-semibold ${
-              sequence.completed
-                ? 'bg-[#80ed99]/15 border-[#80ed99]/50 text-[#80ed99]'
-                : 'bg-[#ffd166]/15 border-[#ffd166]/50 text-[#ffd166]'
-            }`}
+            className="px-2 py-0.5 rounded-xs border font-semibold"
+            style={{
+              backgroundColor: withAlpha(sequence.completed ? C.switchOn : C.switchExpected, 0.14),
+              borderColor: sequence.completed ? C.switchOn : C.switchExpected,
+              color: sequence.completed ? C.switchOn : C.switchExpected,
+            }}
           >
             Secuencia: {sequence.currentStep}/{sequence.totalSteps} ·{' '}
-            {sequence.completed ? 'Completa' : `Siguiente: #${sequence.expectedOrder}`}
+            {sequence.completed ? '✓ Completa' : `→ Esperado #${sequence.expectedOrder}`}
           </span>
 
           {sequence.hasRecentError && (
             <span
               role="status"
               aria-live="polite"
-              className="px-1.5 py-0.5 rounded border bg-[#ff3b3b]/15 border-[#ff3b3b]/60 text-[#fca5a5] font-semibold"
+              className="px-2 py-0.5 rounded-xs border font-semibold"
+              style={{
+                backgroundColor: withAlpha(C.switchError, 0.16),
+                borderColor: C.switchError,
+                color: C.switchError,
+              }}
             >
-              Error de orden · Secuencia reiniciada (esperado #1)
+              ! Error de orden · Secuencia reiniciada (esperado #1)
             </span>
           )}
 
-          {sequence.switches.map((sw) => (
-            <span
-              key={sw.id}
-              className={`px-1.5 py-0.5 rounded border ${
-                sw.activated
-                  ? 'bg-[#80ed99]/15 border-[#80ed99]/50 text-[#80ed99]'
-                  : sw.isExpected
-                    ? 'bg-[#ffd166]/15 border-[#ffd166]/60 text-white'
-                    : 'bg-[#14161a] border-[#2a303a] text-slate-400'
-              }`}
-            >
-              #{sw.order} {sw.label}:{' '}
-              {sw.activated ? 'Activado' : sw.isExpected ? 'Siguiente' : 'Pendiente'}
-            </span>
-          ))}
+          {sequence.switches.map((sw) => {
+            const color = sw.activated
+              ? C.switchOn
+              : sw.isExpected
+                ? C.switchExpected
+                : C.switchPending;
+            const symbol = sw.activated ? '✓' : sw.isExpected ? '→' : '○';
+            const stateLabel = sw.activated
+              ? 'Activado'
+              : sw.isExpected
+                ? 'Siguiente'
+                : 'Pendiente';
+
+            return (
+              <span
+                key={sw.id}
+                className="px-1.5 py-0.5 rounded-xs border"
+                style={{
+                  backgroundColor: sw.activated || sw.isExpected ? withAlpha(color, 0.14) : C.surfaceMuted,
+                  borderColor: sw.activated || sw.isExpected ? color : C.borderSubtle,
+                  color,
+                }}
+              >
+                {symbol} #{sw.order}: {stateLabel}
+              </span>
+            );
+          })}
         </div>
       )}
 
       {movingLasers.map((ml) => (
         <div
           key={ml.id}
-          className="inline-flex items-center gap-1.5 font-mono tabular-nums text-[11px] bg-[#14161a] border border-[#2a303a] rounded px-2 py-0.5"
+          className="inline-flex items-center gap-1.5 type-numeric text-xs bg-[var(--color-surface-muted)] border border-[var(--color-border-subtle)] rounded-xs px-2 py-0.5"
         >
-          <span className="text-[#fca5a5] font-semibold">Láser móvil {ml.id}</span>
-          <span className="text-slate-400">
+          <span className="font-semibold text-[var(--color-laser-active)]">
+            ↔ Láser móvil {ml.id}
+          </span>
+          <span className="text-[var(--color-text-muted)]">
             P:{ml.periodFrames}f · Desf:{ml.phaseOffsetFrames}f
           </span>
         </div>
       ))}
 
       {displayedSegments.length > 0 && (
-        <div className="inline-flex flex-wrap items-center gap-1.5 font-mono tabular-nums text-[11px]">
+        <div className="inline-flex flex-wrap items-center gap-2 type-numeric text-xs">
           {displayedSegments.map((seg) => {
             const label = seg.segmentId ?? seg.id;
             const statusText = !seg.powered
-              ? 'Sin energía'
+              ? '○ Sin energía'
               : !seg.enabled
-                ? 'Deshabilitado'
+                ? '✓ Deshabilitado'
                 : !seg.active && seg.blockedByLap !== null
-                  ? `Ocluido (${getLapCode(seg.blockedByLap)})`
+                  ? `■ Ocluido (${getLapCode(seg.blockedByLap)})`
                   : seg.blockedByLap !== null
-                    ? `Bloqueado (${getLapCode(seg.blockedByLap)})`
-                    : 'Activo';
+                    ? `■ Bloqueado (${getLapCode(seg.blockedByLap)})`
+                    : '▲ Activo';
 
-            const statusClass = !seg.powered
-              ? 'bg-[#14161a] border-[#2a303a] text-slate-400'
+            const color = !seg.powered
+              ? C.laserInactive
               : !seg.enabled
-                ? 'bg-[#80ed99]/15 border-[#80ed99]/50 text-[#80ed99]'
+                ? C.laserDisabled
                 : seg.blockedByLap !== null
-                  ? 'bg-[#ffd166]/15 border-[#ffd166]/60 text-[#ffd166]'
-                  : 'bg-[#ff3b3b]/15 border-[#ff3b3b]/60 text-[#fca5a5]';
+                  ? C.laserBlocked
+                  : C.laserActive;
 
             return (
-              <span key={seg.id} className={`px-1.5 py-0.5 rounded border ${statusClass}`}>
+              <span
+                key={seg.id}
+                className="px-1.5 py-0.5 rounded-xs border font-medium"
+                style={{
+                  backgroundColor: seg.powered ? withAlpha(color, 0.14) : C.surfaceMuted,
+                  borderColor: seg.powered ? color : C.borderSubtle,
+                  color,
+                }}
+              >
                 {label}: {statusText}
               </span>
             );

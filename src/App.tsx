@@ -2,21 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
-  Eye,
-  EyeOff,
-  FastForward,
-  Pause,
-  Play,
-  RotateCcw,
-  Volume2,
-  VolumeX,
 } from 'lucide-react';
-import { FutureMechanicsLegend } from './components/FutureMechanicsLegend.tsx';
 import { LevelSelectorModal } from './components/LevelSelectorModal.tsx';
 import { TimelineBar } from './components/TimelineBar.tsx';
 import { TitleMenu } from './components/TitleMenu.tsx';
 import { sfx } from './game/audio.ts';
-import { getLapCode, getLapColor } from './game/colors.ts';
+import {
+  applyThemeTokens,
+  TOKENS,
+} from './game/colors.ts';
 import { CANVAS_H, CANVAS_W, LEVELS } from './game/levels.ts';
 import { renderGame } from './game/render.ts';
 import {
@@ -26,7 +20,6 @@ import {
   finishCurrentLap,
   getDeathMessage,
   isWon,
-  LOOP_SECONDS,
   rewindStep,
   seekToFrame,
   stepSim,
@@ -35,7 +28,15 @@ import {
   type SimState,
 } from './game/sim.ts';
 
+if (typeof document !== 'undefined') {
+  applyThemeTokens();
+}
+
 const STORAGE_KEY = 'paradoxloop_completed_v1';
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const { color: C } = TOKENS;
 
 function loadCompletedLevels(): number[] {
   try {
@@ -58,19 +59,16 @@ export default function App() {
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
 
-  const [speed, setSpeed] = useState<1 | 2 | 4>(1);
-  const speedRef = useRef(speed);
-  speedRef.current = speed;
+  // RF-17: UI-only dismissal flag so Escape closes Victory/Death overlays cleanly
+  const [overlayDismissed, setOverlayDismissed] = useState(false);
 
-  const [showFuturePreview, setShowFuturePreview] = useState(true);
-  const showFutureRef = useRef(showFuturePreview);
-  showFutureRef.current = showFuturePreview;
-
-  const [muted, setMuted] = useState(false);
   const [completedLevels, setCompletedLevels] = useState<number[]>(loadCompletedLevels);
-  const [modalMode, setModalMode] = useState<'levels' | 'rules' | null>(null);
+  const [controlsOpen, setControlsOpen] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const resultOverlayRef = useRef<HTMLDivElement>(null);
+  const resultPrevFocusRef = useRef<HTMLElement | null>(null);
+
   const keysRef = useRef<{
     up: boolean;
     down: boolean;
@@ -97,6 +95,9 @@ export default function App() {
 
   const resetLevel = useCallback(
     (targetIdx = levelIndex) => {
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
       const fresh = createInitialState(targetIdx);
       prevPlatesCountRef.current = 0;
       prevLapRef.current = 0;
@@ -104,6 +105,7 @@ export default function App() {
       prevWonRef.current = false;
       setLevelIndex(targetIdx);
       setPaused(false);
+      setOverlayDismissed(false);
       setScreen('play');
       syncState(fresh);
     },
@@ -124,14 +126,19 @@ export default function App() {
       prevDeadRef.current = true;
     }
     setPaused(false);
+    setOverlayDismissed(false);
     syncState(next);
   }, [syncState]);
 
   const handleRewindToLapStart = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     const cur = simRef.current;
     const next = seekToFrame(cur, cur.lap, 0);
     prevDeadRef.current = false;
     setPaused(false);
+    setOverlayDismissed(false);
     syncState(next);
   }, [syncState]);
 
@@ -142,28 +149,103 @@ export default function App() {
       prevDeadRef.current = false;
       prevWonRef.current = false;
       prevLapRef.current = next.lap;
+      setOverlayDismissed(false);
       syncState(next);
     },
     [syncState]
   );
 
-  // Keyboard bindings
+  const world = deriveWorld(simState);
+  const { level, won } = world;
+  const isTimeout = simState.dead && simState.cause === 'timeout';
+  const showDeathCard =
+    simState.dead && (isTimeout || simState.deathTimer >= DEATH_SLOWMO_FRAMES);
+  const activeResultOverlay: 'death' | 'win' | null =
+    screen === 'play' && !controlsOpen && !overlayDismissed
+      ? won
+        ? 'win'
+        : showDeathCard
+          ? 'death'
+          : null
+      : null;
+
+  // Reset dismissal when a new terminal state begins
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Escape' && !e.repeat) {
-        if (modalMode !== null) {
-          e.preventDefault();
-          setModalMode(null);
-          return;
-        }
-        if (screen === 'play') {
-          e.preventDefault();
-          setModalMode('levels');
-          return;
-        }
+    if (!won && !showDeathCard) {
+      setOverlayDismissed(false);
+    }
+  }, [won, showDeathCard]);
+
+  // RF-17: Focus trap, Escape dismissal, and focus restoration for Victory / Death overlays
+  useEffect(() => {
+    if (!activeResultOverlay) return;
+
+    resultPrevFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const focusFirst = () => {
+      const container = resultOverlayRef.current;
+      if (!container) return;
+      const focusables = container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      if (focusables.length > 0) {
+        focusables[0].focus();
+      } else {
+        container.focus();
+      }
+    };
+
+    const frameId = requestAnimationFrame(focusFirst);
+
+    const onOverlayKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        setOverlayDismissed(true);
+        return;
       }
 
-      if (screen !== 'play' || modalMode !== null) return;
+      if (e.key !== 'Tab') return;
+      const container = resultOverlayRef.current;
+      if (!container) return;
+      const focusables = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+      if (focusables.length === 0) return;
+
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+
+      if (e.shiftKey) {
+        if (active === first || !container.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !container.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener('keydown', onOverlayKeyDown, true);
+    return () => {
+      cancelAnimationFrame(frameId);
+      window.removeEventListener('keydown', onOverlayKeyDown, true);
+      if (
+        resultPrevFocusRef.current &&
+        resultPrevFocusRef.current !== document.body &&
+        document.contains(resultPrevFocusRef.current)
+      ) {
+        resultPrevFocusRef.current.focus();
+      }
+    };
+  }, [activeResultOverlay]);
+
+  // Global keyboard bindings (isolated from timeline slider and active overlays)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Let active modal or result overlay handle Escape and keyboard focus
+      if (controlsOpen || activeResultOverlay !== null) return;
+
+      if (screen !== 'play') return;
 
       const isFocusedButton =
         e.target instanceof HTMLButtonElement || e.target instanceof HTMLAnchorElement;
@@ -186,12 +268,12 @@ export default function App() {
         if (!simRef.current.dead) {
           keysRef.current.rewind = true;
         }
-      } else if (code === 'Enter') {
+      } else if (code === 'Space') {
         if (!e.repeat && !isFocusedButton) {
           e.preventDefault();
           handleFinishCurrentLap();
         }
-      } else if (code === 'Space') {
+      } else if (code === 'Enter' || code === 'NumpadEnter') {
         if (!isFocusedButton) {
           e.preventDefault();
           if (!e.repeat && !simRef.current.dead && !isWon(simRef.current)) {
@@ -225,9 +307,9 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [handleFinishCurrentLap, modalMode, resetLevel, screen]);
+  }, [activeResultOverlay, controlsOpen, handleFinishCurrentLap, resetLevel, screen]);
 
-  // Fixed 60 Hz simulation & render loop
+  // Fixed 60 Hz simulation & render loop (unaffected by prefers-reduced-motion)
   useEffect(() => {
     if (screen !== 'play') return;
 
@@ -253,9 +335,8 @@ export default function App() {
         prevWonRef.current = false;
         prevLapRef.current = state.lap;
         syncState(state);
-      } else if (!pausedRef.current && modalMode === null) {
-        const activeSpeed = state.dead ? 1 : speedRef.current;
-        accumulator += elapsed * activeSpeed;
+      } else if (!pausedRef.current && !controlsOpen) {
+        accumulator += elapsed;
         const input: InputState = {
           up: keysRef.current.up,
           down: keysRef.current.down,
@@ -276,11 +357,11 @@ export default function App() {
         }
 
         if (stepped) {
-          const world = deriveWorld(state);
-          if (world.pressedPlates.size > prevPlatesCountRef.current) {
+          const nextWorld = deriveWorld(state);
+          if (nextWorld.pressedPlates.size > prevPlatesCountRef.current) {
             sfx.plateOn();
           }
-          prevPlatesCountRef.current = world.pressedPlates.size;
+          prevPlatesCountRef.current = nextWorld.pressedPlates.size;
 
           if (state.lap > prevLapRef.current) {
             sfx.lapNext();
@@ -292,7 +373,7 @@ export default function App() {
           }
           prevDeadRef.current = state.dead;
 
-          if (world.won && !prevWonRef.current) {
+          if (nextWorld.won && !prevWonRef.current) {
             sfx.win();
             const lvlId = LEVELS[state.levelIndex].id;
             setCompletedLevels((prev) => {
@@ -306,7 +387,7 @@ export default function App() {
               return updated;
             });
           }
-          prevWonRef.current = world.won;
+          prevWonRef.current = nextWorld.won;
 
           syncState(state);
         }
@@ -317,7 +398,7 @@ export default function App() {
         const ctx = canvas.getContext('2d');
         if (ctx) {
           renderGame(ctx, simRef.current, {
-            showFuturePreview: showFutureRef.current,
+            showFuturePreview: false,
             isRewinding: rewinding,
             isPaused: pausedRef.current,
           });
@@ -329,78 +410,59 @@ export default function App() {
 
     rafId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafId);
-  }, [modalMode, screen, syncState]);
-
-  const world = deriveWorld(simState);
-  const { level, pressedPlates, openDoors, lasers, won } = world;
-  const isTimeout = simState.dead && simState.cause === 'timeout';
-  const showDeathCard =
-    simState.dead && (isTimeout || simState.deathTimer >= DEATH_SLOWMO_FRAMES);
-  const currentLapSeconds = (simState.t / TICK_HZ).toFixed(1);
-  const lapColor = getLapColor(simState.lap);
-  const lapCode = getLapCode(simState.lap);
-  const canEndLapEarly = !simState.dead && !won && simState.lap + 1 < level.maxLaps;
+  }, [controlsOpen, screen, syncState]);
 
   return (
-    <div className="min-h-screen bg-[#14161a] text-[#f1f5f9] flex flex-col">
-      {/* Top Bar: Brand — scalable navigation — 1 primary action */}
-      <header className="border-b border-[#2a303a] bg-[#14161a] shrink-0">
+    <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] flex flex-col">
+      {/* Top Bar: Brand — Essential Navigation — Contextual Action (strictly 1 primary per screen) */}
+      <header className="border-b border-[var(--color-border-subtle)] bg-[var(--color-bg)] shrink-0">
         <div className="max-w-[1040px] mx-auto px-4 sm:px-6 h-12 flex items-center justify-between gap-4">
           <button
             type="button"
             onClick={() => {
-              setModalMode(null);
+              setControlsOpen(false);
               setScreen('menu');
             }}
-            className="text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0 cursor-pointer hover:text-[#4cc9f0] transition-colors rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
+            className="type-title min-h-8 px-1 text-lg font-bold tracking-tight text-[var(--color-text)] hover:text-[var(--color-accent)] transition-colors whitespace-nowrap shrink-0 cursor-pointer rounded-[var(--radius-sm)]"
           >
             Hold For Me
           </button>
 
           <nav
             aria-label="Navegación principal"
-            className="hidden sm:flex items-center gap-5 text-xs font-medium text-slate-300"
+            className="hidden sm:flex items-center gap-2 text-xs"
           >
             <button
               type="button"
               onClick={() => {
-                setModalMode(null);
+                setControlsOpen(false);
                 setScreen('menu');
               }}
               aria-current={screen === 'menu' ? 'page' : undefined}
-              className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer rounded px-1 py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0] ${
-                screen === 'menu' ? 'text-[#4cc9f0]' : 'hover:text-white'
-              }`}
+              className="btn-nav"
             >
               Inicio
             </button>
             <button
               type="button"
-              onClick={() => setModalMode('levels')}
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer rounded px-1 py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
+              onClick={() => setControlsOpen(true)}
+              className="btn-nav"
             >
-              Niveles ({LEVELS.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setModalMode('rules')}
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer rounded px-1 py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
-            >
-              Reglas
+              Controles
             </button>
 
             {screen === 'play' && (
-              <div className="flex items-center gap-1.5 pl-3 border-l border-[#2a303a]">
+              <div className="flex items-center gap-2 pl-3 ml-1 border-l border-[var(--color-border-subtle)]">
                 <button
                   type="button"
                   disabled={levelIndex <= 0}
                   onClick={() => resetLevel(levelIndex - 1)}
                   aria-label="Nivel anterior"
-                  className="p-1 rounded text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-35 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#4cc9f0]"
+                  className="btn-secondary p-0 w-8 h-8"
                 >
-                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <ChevronLeft className="w-4 h-4" aria-hidden="true" />
                 </button>
-                <span className="font-mono tabular-nums text-slate-200 px-1">
+                <span className="type-numeric text-xs font-medium text-[var(--color-text)] px-1 whitespace-nowrap">
                   Nivel {level.id}/{LEVELS.length}
                 </span>
                 <button
@@ -408,35 +470,15 @@ export default function App() {
                   disabled={levelIndex + 1 >= LEVELS.length}
                   onClick={() => resetLevel(levelIndex + 1)}
                   aria-label="Siguiente nivel"
-                  className="p-1 rounded text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-35 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#4cc9f0]"
+                  className="btn-secondary p-0 w-8 h-8"
                 >
-                  <ChevronRight className="w-3.5 h-3.5" />
+                  <ChevronRight className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
             )}
           </nav>
 
-          <div className="flex items-center gap-2 shrink-0">
-            {screen === 'menu' ? (
-              <button
-                type="button"
-                onClick={() => resetLevel(0)}
-                className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-[#4cc9f0] text-[#14161a] text-xs font-bold hover:bg-[#72d6f5] transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
-              >
-                <Play className="w-3.5 h-3.5 fill-current" />
-                Comenzar
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => resetLevel(levelIndex)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#232830] border border-[#2a303a] text-xs font-medium text-white hover:bg-[#2d333d] transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Reiniciar nivel
-              </button>
-            )}
-          </div>
+          <div className="flex items-center gap-2 shrink-0" />
         </div>
       </header>
 
@@ -444,195 +486,13 @@ export default function App() {
         <TitleMenu
           completedLevels={completedLevels}
           onStart={(idx = 0) => resetLevel(idx)}
-          onOpenRules={() => setModalMode('rules')}
+          onOpenControls={() => setControlsOpen(true)}
         />
       ) : (
-        <main className="flex-1 w-full max-w-[1008px] mx-auto px-4 sm:px-6 py-2.5 flex flex-col items-center justify-center">
+        <main className="flex-1 w-full max-w-[1008px] mx-auto px-4 sm:px-6 py-2 flex flex-col items-center justify-center">
           <div className="w-full max-w-[960px] space-y-2">
-            {/* Level Header & Controls */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="min-w-0">
-                <div className="flex items-baseline gap-2 flex-wrap">
-                  <h1 className="text-base sm:text-lg font-semibold text-white">
-                    Nivel {level.id}: {level.name}
-                  </h1>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span
-                    className="text-xs sm:text-sm font-mono tabular-nums font-semibold"
-                    style={{ color: lapColor }}
-                  >
-                    {lapCode} ({simState.lap + 1}/{level.maxLaps})
-                  </span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className="text-xs sm:text-sm font-mono tabular-nums text-slate-300">
-                    {currentLapSeconds} s / {LOOP_SECONDS.toFixed(1)} s
-                  </span>
-                  <span className="hidden lg:inline-flex items-center gap-1 ml-1" aria-hidden="true">
-                    {Array.from({ length: level.maxLaps }).map((_, idx) => {
-                      const c = getLapColor(idx);
-                      const active = idx === simState.lap;
-                      const past = idx < simState.lap;
-                      return (
-                        <span
-                          key={idx}
-                          className="h-1.5 w-3.5 rounded-xs transition-opacity"
-                          style={{
-                            backgroundColor: c,
-                            opacity: active ? 1 : past ? 0.65 : 0.2,
-                          }}
-                        />
-                      );
-                    })}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-400 truncate">{level.subtitle}</p>
-              </div>
-
-              {/* Functional controls */}
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {canEndLapEarly && (
-                  <button
-                    type="button"
-                    onClick={handleFinishCurrentLap}
-                    title="Fija tu posición actual hasta los 20 s y pasa directo a la siguiente vuelta (Enter)"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#4cc9f0] text-[#14161a] text-xs font-semibold hover:bg-[#72d6f5] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
-                  >
-                    <FastForward className="w-3.5 h-3.5" />
-                    Terminar vuelta
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setPaused((p) => !p)}
-                  aria-pressed={paused}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#1c2026] border border-[#2a303a] text-xs font-medium text-slate-200 hover:text-white hover:border-slate-500 transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
-                >
-                  {paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-                  {paused ? 'Reanudar' : 'Pausar'}
-                </button>
-
-                <div
-                  className="flex items-center p-0.5 rounded-lg bg-[#1c2026] border border-[#2a303a]"
-                  role="group"
-                  aria-label="Velocidad de simulación"
-                >
-                  {([1, 2, 4] as const).map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setSpeed(s)}
-                      aria-pressed={speed === s}
-                      className={`px-2 py-1 rounded-md text-xs font-mono tabular-nums transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#4cc9f0] ${
-                        speed === s ? 'bg-[#2a303a] text-white' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      {s}×
-                    </button>
-                  ))}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowFuturePreview((v) => !v)}
-                  aria-pressed={showFuturePreview}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0] ${
-                    showFuturePreview
-                      ? 'bg-[#1c2026] border-[#4cc9f0]/50 text-[#4cc9f0]'
-                      : 'bg-[#1c2026] border-[#2a303a] text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {showFuturePreview ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                  Futuro +2s
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextMuted = !muted;
-                    sfx.muted = nextMuted;
-                    setMuted(nextMuted);
-                  }}
-                  aria-label={muted ? 'Activar sonido' : 'Silenciar sonido'}
-                  aria-pressed={muted}
-                  className="p-1.5 rounded-lg bg-[#1c2026] border border-[#2a303a] text-slate-400 hover:text-white transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
-                >
-                  {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            {/* Minimalist Hint & Live State Feedback Strip */}
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#1c2026] border border-[#2a303a] px-3 py-1.5 text-xs">
-              <p className="text-slate-300 leading-snug">
-                <span className="font-semibold text-[#4cc9f0] mr-1.5">Pista:</span>
-                {level.hint}
-              </p>
-
-              {(level.plates.length > 0 || level.doors.length > 0 || lasers.length > 0) && (
-                <div
-                  className="flex flex-wrap items-center gap-2 font-mono tabular-nums text-[11px] shrink-0"
-                  aria-label="Estado de mecanismos del nivel"
-                >
-                  {level.plates.map((plate) => {
-                    const active = pressedPlates.has(plate.id);
-                    return (
-                      <span
-                        key={plate.id}
-                        className={`px-1.5 py-0.5 rounded border ${
-                          active
-                            ? 'bg-[#8ecae6]/15 border-[#8ecae6]/60 text-white'
-                            : 'bg-[#14161a] border-[#2a303a] text-slate-400'
-                        }`}
-                      >
-                        Placa {plate.label}: {active ? 'Activa' : 'Libre'}
-                      </span>
-                    );
-                  })}
-                  {level.doors.map((door) => {
-                    const isOpen = openDoors.has(door.id);
-                    return (
-                      <span
-                        key={door.id}
-                        className={`px-1.5 py-0.5 rounded border ${
-                          isOpen
-                            ? 'bg-[#80ed99]/15 border-[#80ed99]/50 text-[#80ed99]'
-                            : 'bg-[#14161a] border-[#2a303a] text-slate-400'
-                        }`}
-                      >
-                        {door.id}: {isOpen ? 'Abierta' : 'Cerrada'}
-                      </span>
-                    );
-                  })}
-                  {lasers.map((seg) => (
-                    <span
-                      key={seg.id}
-                      className={`px-1.5 py-0.5 rounded border ${
-                        !seg.powered
-                          ? 'bg-[#14161a] border-[#2a303a] text-slate-400'
-                          : !seg.enabled
-                            ? 'bg-[#80ed99]/15 border-[#80ed99]/50 text-[#80ed99]'
-                            : seg.blockedByLap !== null
-                              ? 'bg-[#ffd166]/15 border-[#ffd166]/60 text-[#ffd166]'
-                              : 'bg-[#ff3b3b]/15 border-[#ff3b3b]/60 text-[#fca5a5]'
-                      }`}
-                    >
-                      {seg.id}:{' '}
-                      {!seg.powered
-                        ? 'Apagado'
-                        : !seg.enabled
-                          ? 'Deshabilitado'
-                          : seg.blockedByLap !== null
-                            ? `Bloqueado (${getLapCode(seg.blockedByLap)})`
-                            : 'Activo'}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-
             {/* Canvas Container (960x400 logical aspect 12:5) */}
-            <div className="relative w-full aspect-[12/5] rounded-xl border border-[#2a303a] bg-[#14161a] overflow-hidden shadow-xl">
+            <div className="relative w-full aspect-[12/5] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] overflow-hidden shadow-xl">
               <canvas
                 ref={canvasRef}
                 width={CANVAS_W}
@@ -641,41 +501,41 @@ export default function App() {
                 className="w-full h-full block"
               />
 
-              {/* Death / Loss Card */}
-              {showDeathCard && (
+              {/* Death / Loss Overlay Card (RF-17 focus trap + Escape + 1 primary action) */}
+              {activeResultOverlay === 'death' && (
                 <div
                   role="alertdialog"
+                  aria-modal="true"
                   aria-live="assertive"
                   aria-labelledby="death-title"
-                  className="absolute inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+                  className="absolute inset-0 backdrop-blur-xs flex items-center justify-center p-4"
+                  style={{ backgroundColor: 'var(--color-scrim)' }}
                 >
-                  <div className="w-full max-w-md rounded-xl bg-[#1c2026] border border-[#ff3b3b]/60 p-5 shadow-2xl">
-                    <div className="text-xs font-mono tabular-nums text-[#fca5a5]">
-                      {isTimeout
-                        ? `Derrota · ${lapCode} (${simState.lap + 1} de ${level.maxLaps})`
-                        : `${lapCode} · ${currentLapSeconds} s`}
-                    </div>
-                    <h2 id="death-title" className="mt-1 text-xl font-bold text-white">
+                  <div
+                    ref={resultOverlayRef}
+                    tabIndex={-1}
+                    className="w-full max-w-md rounded-[var(--radius-md)] bg-[var(--color-surface)] border-2 p-5 shadow-2xl"
+                    style={{ borderColor: C.laserActive }}
+                  >
+                    <h2
+                      id="death-title"
+                      className="type-title text-xl font-bold text-[var(--color-text)]"
+                    >
                       {isTimeout ? 'Te quedaste sin tiempo' : getDeathMessage(simState)}
                     </h2>
-                    <p className="mt-1.5 text-sm text-slate-300 leading-relaxed">
-                      {isTimeout
-                        ? 'Se terminó el loop antes de alcanzar la meta. Elegí reiniciar esta vuelta o empezar el nivel de nuevo.'
-                        : 'La vuelta se interrumpió antes de llegar a la meta. Elegí reiniciar esta vuelta o empezar el nivel de nuevo.'}
-                    </p>
 
                     <div className="mt-4 flex flex-wrap items-center gap-3">
                       <button
                         type="button"
                         onClick={handleRewindToLapStart}
-                        className="px-4 py-2 rounded-lg bg-[#4cc9f0] text-[#14161a] text-sm font-semibold hover:bg-[#72d6f5] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
+                        className="btn-primary text-sm"
                       >
                         Reiniciar vuelta
                       </button>
                       <button
                         type="button"
                         onClick={() => resetLevel(levelIndex)}
-                        className="px-4 py-2 rounded-lg bg-[#232830] border border-[#2a303a] text-sm font-medium text-white hover:bg-[#2d333d] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
+                        className="btn-secondary text-sm"
                       >
                         Reiniciar nivel
                       </button>
@@ -684,98 +544,70 @@ export default function App() {
                 </div>
               )}
 
-              {/* Victory Card */}
-              {won && (
+              {/* Victory Overlay Card (RF-17 focus trap + RF-18 N10 campaign finale + 1 primary action) */}
+              {activeResultOverlay === 'win' && (
                 <div
                   role="dialog"
+                  aria-modal="true"
                   aria-live="polite"
                   aria-labelledby="win-title"
-                  className="absolute inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
+                  className="absolute inset-0 backdrop-blur-xs flex items-center justify-center p-4"
+                  style={{ backgroundColor: 'var(--color-scrim)' }}
                 >
-                  <div className="w-full max-w-md rounded-xl bg-[#1c2026] border border-[#ffb703]/60 p-5 shadow-2xl">
-                    <div className="text-xs font-mono tabular-nums text-[#ffb703]">
-                      {levelIndex + 1 >= LEVELS.length ? 'Campaña completada · ' : ''}
-                      Nivel {level.id} resuelto · {simState.lap + 1}{' '}
-                      {simState.lap === 0 ? 'vuelta' : 'vueltas'}
-                    </div>
-                    <h2 id="win-title" className="mt-1 text-xl font-bold text-white">
-                      {levelIndex + 1 >= LEVELS.length
-                        ? '¡Última coordinación completada!'
-                        : `¡Nivel ${level.id} completado!`}
+                  <div
+                    ref={resultOverlayRef}
+                    tabIndex={-1}
+                    className="w-full max-w-md rounded-[var(--radius-md)] bg-[var(--color-surface)] border-2 p-5 shadow-2xl"
+                    style={{ borderColor: C.goal }}
+                  >
+                    <h2
+                      id="win-title"
+                      className="type-title text-xl font-bold text-[var(--color-text)]"
+                    >
+                      ¡Nivel {level.id} completado!
                     </h2>
-                    <p className="mt-1.5 text-sm text-slate-300 leading-relaxed">
-                      {levelIndex + 1 >= LEVELS.length
-                        ? `Completaste los ${LEVELS.length} niveles. El presente encontró el hueco que dejó tu historia.`
-                        : 'El presente encontró el hueco que dejó tu historia.'}
-                    </p>
+
                     <div className="mt-4 flex flex-wrap items-center gap-3">
                       {levelIndex + 1 < LEVELS.length ? (
                         <button
                           type="button"
                           onClick={() => resetLevel(levelIndex + 1)}
-                          className="px-4 py-2 rounded-lg bg-[#ffb703] text-[#14161a] text-sm font-semibold hover:bg-[#ffc633] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffb703]"
+                          className="btn-primary text-sm"
                         >
                           Siguiente nivel
                         </button>
                       ) : (
                         <button
                           type="button"
-                          onClick={() => resetLevel(0)}
-                          className="px-4 py-2 rounded-lg bg-[#ffb703] text-[#14161a] text-sm font-semibold hover:bg-[#ffc633] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffb703]"
+                          onClick={() => {
+                            setControlsOpen(false);
+                            setScreen('menu');
+                          }}
+                          className="btn-primary text-sm"
                         >
-                          Volver a jugar desde el 1
+                          Volver al menú
                         </button>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => setModalMode('levels')}
-                        className="px-4 py-2 rounded-lg bg-[#232830] border border-[#2a303a] text-sm font-medium text-white hover:bg-[#2d333d] transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
-                      >
-                        Selector de niveles
-                      </button>
                     </div>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Live Sequence / Moving Laser / Segment HUD (only shown if level declares them) */}
-            <FutureMechanicsLegend world={world} />
-
-            {/* Interactive Timeline */}
+            {/* Interactive Timeline (1-6 dynamic laps, ArrowLeft 1-frame rewind per D-005-6) */}
             <TimelineBar
               state={simState}
               maxLaps={level.maxLaps}
               disabled={simState.dead}
               onSeek={handleSeek}
             />
-
-            {/* Quiet 1-line controls legend */}
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-              <div className="flex flex-wrap items-center gap-2.5">
-                <span>Mover: WASD / Flechas</span>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span>Terminar vuelta: Enter</span>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span>Pausar: Espacio</span>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span>Rebobinar: Mantener R</span>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span>Reiniciar: Supr</span>
-              </div>
-              <div className="text-slate-500">El presente es blando. El pasado es duro.</div>
-            </div>
           </div>
         </main>
       )}
 
       <LevelSelectorModal
-        isOpen={modalMode !== null}
-        mode={modalMode ?? 'levels'}
-        currentLevelIndex={levelIndex}
-        completedLevels={completedLevels}
-        onSelectLevel={(idx) => resetLevel(idx)}
-        onClose={() => setModalMode(null)}
+        isOpen={controlsOpen}
+        onClose={() => setControlsOpen(false)}
       />
     </div>
   );

@@ -6,14 +6,154 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
-@layer base {
-  body {
-    font-family: var(--font-sans);
-    background-color: #14161a;
-    color: #f1f5f9;
-  }
+:root {
+  /* Typographic roles strictly reusing index.html declared families */
+  --type-title: var(--font-display);
+  --type-body: var(--font-sans);
+  --type-numeric: var(--font-mono);
+}
 
-  h1, h2, h3, .font-display {
-    font-family: var(--font-display);
+/* Base rules consume CSS custom properties injected from src/game/colors.ts */
+html,
+body {
+  font-family: var(--type-body);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  letter-spacing: 0.005em;
+}
+
+::selection {
+  background-color: var(--color-accent-selection);
+  color: var(--color-text);
+}
+
+h1,
+h2,
+h3,
+.type-title {
+  font-family: var(--type-title);
+}
+
+.type-body {
+  font-family: var(--type-body);
+}
+
+.type-numeric {
+  font-family: var(--type-numeric);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Global accessible 2px focus indicator (>= 8.5:1 contrast against surfaces) */
+:where(button, a, [tabindex], [role="slider"]):focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Action hierarchy: primary vs secondary distinguishable by shape, border, and ink */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-sm);
+  min-height: var(--control-min);
+  min-width: var(--control-min);
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: var(--stroke-base) solid var(--color-accent);
+  background-color: var(--color-accent);
+  color: var(--color-ink-on-accent);
+  font-family: var(--type-body);
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, transform 120ms ease;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-sm);
+  min-height: var(--control-min);
+  min-width: var(--control-min);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: var(--stroke-thin) solid var(--color-border);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--type-body);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--color-surface-alt);
+  border-color: var(--color-border-strong);
+}
+
+.btn-secondary[aria-pressed="true"],
+.btn-secondary[aria-expanded="true"] {
+  background-color: var(--color-surface-alt);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.btn-secondary:disabled,
+.btn-primary:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.btn-controls:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.btn-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-min);
+  min-width: var(--control-min);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-family: var(--type-body);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 140ms ease, background-color 140ms ease;
+}
+
+.btn-nav:hover {
+  color: var(--color-accent);
+  background-color: transparent;
+}
+
+.btn-nav[aria-current="page"],
+.btn-nav[aria-current="page"]:hover {
+  color: var(--color-accent);
+  background-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

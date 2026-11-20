@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { getLapCode, getLapColor } from '../game/colors.ts';
+import { getLapColor, TOKENS, withAlpha } from '../game/colors.ts';
 import { FRAMES_PER_LAP, LOOP_SECONDS, TICK_HZ, type SimState } from '../game/sim.ts';
 
 interface TimelineBarProps {
@@ -44,32 +44,14 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
     handlePointerSeek(e);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (disabled) return;
-    if (e.key === 'Home') {
-      e.preventDefault();
-      onSeek(0, 0);
-    } else if (e.key === 'PageUp' || e.key === '[') {
-      e.preventDefault();
-      const targetGlobal = Math.max(0, currentTotalFrames - TICK_HZ);
-      const targetLap = Math.floor(targetGlobal / FRAMES_PER_LAP);
-      onSeek(targetLap, targetGlobal - targetLap * FRAMES_PER_LAP);
-    }
-  };
-
   const playheadPercent = (currentTotalFrames / totalFrames) * 100;
   const totalSeconds = (currentTotalFrames / TICK_HZ).toFixed(1);
   const maxSeconds = (maxLaps * LOOP_SECONDS).toFixed(0);
 
   return (
     <div className="w-full select-none">
-      <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-        <div className="flex items-center gap-2.5">
-          <span className="font-medium text-slate-200">Línea de tiempo</span>
-          <span aria-hidden="true" className="text-slate-600">·</span>
-          <span>Click o arrastrá para rebobinar</span>
-        </div>
-        <div className="font-mono tabular-nums text-slate-300">
+      <div className="flex items-center justify-end text-xs text-[var(--color-text-muted)] mb-1">
+        <div className="type-numeric font-medium text-[var(--color-text)]">
           {totalSeconds} s / {maxSeconds} s
         </div>
       </div>
@@ -78,7 +60,6 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
         ref={barRef}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
-        onKeyDown={handleKeyDown}
         role="slider"
         aria-label="Línea de tiempo de vueltas"
         aria-valuemin={0}
@@ -86,15 +67,13 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
         aria-valuenow={currentTotalFrames}
         aria-valuetext={`Vuelta ${state.lap + 1} de ${maxLaps}, ${totalSeconds} segundos`}
         aria-disabled={disabled}
-        tabIndex={disabled ? -1 : 0}
-        className={`relative h-8 w-full rounded-lg bg-[#1c2026] border border-[#2a303a] overflow-hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0] ${
-          disabled ? 'opacity-65 cursor-not-allowed' : 'cursor-pointer'
+        className={`relative h-9 min-h-[36px] w-full rounded-[var(--radius-sm)] bg-[var(--color-surface)] border border-[var(--color-border)] overflow-hidden ${
+          disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
         }`}
       >
         <div className="absolute inset-0 flex">
           {Array.from({ length: maxLaps }).map((_, idx) => {
             const color = getLapColor(idx);
-            const code = getLapCode(idx);
             const isPast = idx < state.lap;
             const isCurrent = idx === state.lap;
             const fillRatio = isPast
@@ -106,33 +85,42 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
             return (
               <div
                 key={idx}
-                className="relative flex-1 h-full border-r border-[#2a303a] last:border-r-0 overflow-hidden"
+                className="relative flex-1 h-full border-r border-[var(--color-border-subtle)] last:border-r-0 overflow-hidden"
               >
                 <div
-                  className="h-full transition-none"
+                  className="h-full"
                   style={{
                     width: `${fillRatio * 100}%`,
-                    backgroundColor: color,
-                    opacity: isPast ? 0.34 : 0.24,
+                    backgroundColor: withAlpha(color, isPast ? 0.24 : 0.18),
                   }}
                 />
                 <span
-                  className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] font-medium font-mono tabular-nums pointer-events-none whitespace-nowrap"
-                  style={{ color: isPast || isCurrent ? color : '#94a3b8' }}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded-xs text-xs font-semibold type-numeric pointer-events-none whitespace-nowrap"
+                  style={{
+                    backgroundColor: withAlpha(TOKENS.color.surfaceMuted, 0.88),
+                    color: isPast || isCurrent ? color : TOKENS.color.textMuted,
+                  }}
                 >
-                  {code} · {LOOP_SECONDS}s
+                  Vuelta {idx + 1} · {LOOP_SECONDS}s
                 </span>
               </div>
             );
           })}
         </div>
 
-        {/* Playhead needle */}
+        {/* High-contrast playhead needle */}
         <div
-          className="absolute top-0 bottom-0 w-0.5 bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)] pointer-events-none"
-          style={{ left: `${playheadPercent}%` }}
+          className="absolute top-0 bottom-0 w-0.5 pointer-events-none"
+          style={{
+            left: `${playheadPercent}%`,
+            backgroundColor: TOKENS.color.present,
+            boxShadow: `0 0 8px ${withAlpha(TOKENS.color.accent, 0.85)}`,
+          }}
         >
-          <div className="w-2.5 h-2.5 -ml-[4px] bg-white rounded-xs rotate-45 -mt-1" />
+          <div
+            className="w-2.5 h-2.5 -ml-[4px] rounded-xs rotate-45 -mt-1"
+            style={{ backgroundColor: TOKENS.color.accent }}
+          />
         </div>
       </div>
     </div>

@@ -1,144 +1,116 @@
 import React from 'react';
-import { Play } from 'lucide-react';
-import { getLapColor, LAP_META, MAX_LAPS } from '../game/colors.ts';
-import { LEVELS, MAX_SUPPORTED_LEVELS } from '../game/levels.ts';
+import { BookOpen, Check, Play } from 'lucide-react';
+import { getLapCode, getLapColor, LAP_META } from '../game/colors.ts';
+import { LEVELS } from '../game/levels.ts';
 
 interface TitleMenuProps {
   completedLevels: number[];
   onStart: (levelIndex?: number) => void;
-  onOpenRules: () => void;
+  onOpenControls: () => void;
 }
 
 export const TitleMenu: React.FC<TitleMenuProps> = ({
   completedLevels,
   onStart,
-  onOpenRules,
+  onOpenControls,
 }) => {
-  const useTwoColGrid = LEVELS.length > 5;
+  const displayedLaps = LAP_META.slice(0, Math.max(1, ...LEVELS.map((l) => l.maxLaps)));
 
   return (
-    <main className="flex-1 w-full max-w-[1040px] mx-auto px-4 sm:px-6 py-5 flex items-center justify-center">
-      <div className="w-full rounded-2xl bg-[#1c2026] border border-[#2a303a] p-6 sm:p-9 shadow-2xl">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
-          {/* Left Hero Column */}
-          <div className="lg:col-span-7 flex flex-col justify-between space-y-5">
-            <div>
-              <div
-                className="flex items-center gap-2 mb-4"
-                aria-label={`Paleta de ${MAX_LAPS} vueltas`}
-              >
-                {LAP_META.map((lap) => (
+    <main className="flex-1 w-full max-w-[1040px] mx-auto px-4 sm:px-6 py-4 flex items-center justify-center">
+      <div className="w-full rounded-[var(--radius-lg)] bg-[var(--color-surface)] border border-[var(--color-border-subtle)] p-5 sm:p-7 shadow-2xl space-y-6">
+        {/* Top Hero Header */}
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-5">
+          <div>
+            <div
+              className="flex flex-wrap items-center gap-3 mb-3"
+              aria-label={`Paleta de ${displayedLaps.length} vueltas`}
+            >
+              {displayedLaps.map((lap) => (
+                <span
+                  key={lap.index}
+                  title={`${lap.code} · ${lap.label}`}
+                  className="inline-flex items-center gap-1.5"
+                >
                   <span
-                    key={lap.index}
-                    title={`${lap.code} · ${lap.label}`}
-                    className="inline-flex items-center gap-1.5"
-                  >
-                    <span
-                      className="h-1.5 w-7 rounded-xs block"
-                      style={{ backgroundColor: lap.color }}
-                    />
-                    <span className="text-[10px] font-mono text-slate-400">{lap.code}</span>
-                  </span>
-                ))}
-              </div>
-
-              <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-white [text-wrap:balance]">
-                Hold For Me
-              </h1>
-
-              <p className="mt-3 text-lg font-medium text-[#4cc9f0]">
-                El presente es blando. El pasado es duro.
-              </p>
-
-              <p className="mt-2.5 text-sm sm:text-base text-slate-300 leading-relaxed max-w-xl">
-                Cada nivel es un cuarto y un loop de 20 segundos. Al terminar una vuelta, tu recorrido anterior se vuelve un fantasma sólido y tu rastro pasado pasa a ser pared. Usá tu propia historia para abrir puertas, bloquear láseres y llegar a la meta antes de quedarte sin tiempo.
-              </p>
+                    className="h-2 w-6 rounded-xs block"
+                    style={{ backgroundColor: lap.color }}
+                  />
+                </span>
+              ))}
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 pt-1">
-              <button
-                type="button"
-                onClick={() => onStart(0)}
-                className="inline-flex items-center gap-2.5 px-7 py-2.5 rounded-lg bg-[#4cc9f0] text-[#14161a] text-base font-bold hover:bg-[#72d6f5] transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                Comenzar
-              </button>
-
-              <button
-                type="button"
-                onClick={onOpenRules}
-                className="px-5 py-2.5 rounded-lg bg-[#14161a] border border-[#2a303a] text-sm font-medium text-slate-200 hover:text-white hover:border-slate-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
-              >
-                Ver reglas y controles
-              </button>
-            </div>
+            <h1 className="type-title text-4xl sm:text-5xl font-bold tracking-tight text-[var(--color-text)] [text-wrap:balance]">
+              Hold For Me
+            </h1>
           </div>
 
-          {/* Right Level Quick-Select Column (scalable up to 10 levels) */}
-          <div className="lg:col-span-5 flex flex-col justify-between bg-[#14161a] rounded-xl border border-[#2a303a] p-4 sm:p-5">
-            <div>
-              <div className="flex items-center justify-between text-xs font-medium text-slate-400 mb-3 gap-2">
-                <span>
-                  {LEVELS.length} {LEVELS.length === 1 ? 'nivel' : 'niveles'} · Elegí por dónde empezar
-                </span>
-                <span className="font-mono text-[11px] text-slate-500">
-                  Base {LEVELS.length}/{MAX_SUPPORTED_LEVELS}
-                </span>
-              </div>
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => onStart(0)}
+              className="btn-primary px-6 py-2.5 text-base"
+            >
+              <Play className="w-4 h-4 fill-current shrink-0" aria-hidden="true" />
+              Comenzar
+            </button>
 
-              <div
-                className={`${
-                  useTwoColGrid ? 'grid grid-cols-1 sm:grid-cols-2 gap-2' : 'space-y-2'
-                } max-h-[340px] overflow-y-auto pr-0.5`}
-              >
-                {LEVELS.map((lvl, idx) => {
-                  const done = completedLevels.includes(lvl.id);
-                  return (
-                    <button
-                      key={lvl.id}
-                      type="button"
-                      onClick={() => onStart(idx)}
-                      className="w-full text-left p-2.5 rounded-lg bg-[#1c2026] border border-[#2a303a] hover:border-[#4cc9f0] transition-colors flex items-center justify-between gap-3 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-white truncate">
-                          {lvl.id}. {lvl.name}
-                        </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-slate-400 font-mono tabular-nums">
-                            {lvl.maxLaps} {lvl.maxLaps === 1 ? 'vuelta' : 'vueltas'} · 20 s
-                          </span>
-                          <span className="inline-flex items-center gap-1" aria-hidden="true">
-                            {Array.from({ length: lvl.maxLaps }).map((_, lIdx) => (
-                              <span
-                                key={lIdx}
-                                className="h-1.5 w-3 rounded-xs"
-                                style={{ backgroundColor: getLapColor(lIdx) }}
-                              />
-                            ))}
-                          </span>
-                        </div>
-                      </div>
-                      <span
-                        className={`text-xs font-medium shrink-0 ${
-                          done ? 'text-[#80ed99]' : 'text-slate-400'
-                        }`}
-                      >
-                        {done ? 'Resuelto' : 'Jugar'}
+            <button
+              type="button"
+              onClick={onOpenControls}
+              className="btn-secondary btn-controls px-4 py-2.5 text-sm"
+            >
+              <BookOpen className="w-4 h-4 shrink-0" aria-hidden="true" />
+              Ver controles
+            </button>
+          </div>
+        </div>
+
+        {/* Horizontal Level Quick-Select Grid on Desktop */}
+        <div className="bg-[var(--color-surface-muted)] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] p-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5">
+            {LEVELS.map((lvl, idx) => {
+              const done = completedLevels.includes(lvl.id);
+              return (
+                <button
+                  key={lvl.id}
+                  type="button"
+                  onClick={() => onStart(idx)}
+                  className="w-full min-h-[76px] text-left p-3 rounded-[var(--radius-sm)] bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-alt)] transition-colors flex flex-col justify-between gap-2 cursor-pointer"
+                >
+                  <div className="text-sm font-semibold text-[var(--color-text)] truncate">
+                    {lvl.id}. {lvl.name}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-1.5">
+                    <div className="flex flex-col gap-1 min-w-0">
+                      <span className="text-xs text-[var(--color-text-muted)] type-numeric">
+                        {lvl.maxLaps} {lvl.maxLaps === 1 ? 'vuelta' : 'vueltas'}
                       </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+                      <span className="inline-flex items-center gap-1 flex-wrap" aria-hidden="true">
+                        {Array.from({ length: lvl.maxLaps }).map((_, lIdx) => (
+                          <span
+                            key={lIdx}
+                            title={getLapCode(lIdx)}
+                            className="h-1.5 w-2.5 rounded-xs"
+                            style={{ backgroundColor: getLapColor(lIdx) }}
+                          />
+                        ))}
+                      </span>
+                    </div>
 
-            <div className="mt-4 pt-3 border-t border-[#2a303a] text-xs text-slate-400 flex items-center justify-between">
-              <span>WASD / Flechas · Enter · R</span>
-              <span className="font-mono tabular-nums">
-                {completedLevels.length} / {LEVELS.length}
-              </span>
-            </div>
+                    <span
+                      className={`inline-flex items-center gap-1 text-xs font-semibold shrink-0 whitespace-nowrap self-end ${
+                        done ? 'text-[var(--color-door-open)]' : 'text-[var(--color-text-muted)]'
+                      }`}
+                    >
+                      {done && <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}
+                      {done ? 'Resuelto' : 'Jugar'}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>

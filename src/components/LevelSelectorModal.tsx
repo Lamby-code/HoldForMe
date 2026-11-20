@@ -1,195 +1,142 @@
-import React from 'react';
-import { Check, X } from 'lucide-react';
-import { getLapCode, getLapColor, LAP_META, MAX_LAPS } from '../game/colors.ts';
-import { LEVELS, MAX_SUPPORTED_LEVELS } from '../game/levels.ts';
+import React, { useEffect, useRef } from 'react';
+import { X } from 'lucide-react';
 
 interface LevelSelectorModalProps {
   isOpen: boolean;
-  mode: 'levels' | 'rules';
-  currentLevelIndex: number;
-  completedLevels: number[];
-  onSelectLevel: (index: number) => void;
   onClose: () => void;
 }
 
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export const LevelSelectorModal: React.FC<LevelSelectorModalProps> = ({
   isOpen,
-  mode,
-  currentLevelIndex,
-  completedLevels,
-  onSelectLevel,
   onClose,
 }) => {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const focusFirst = () => {
+      const container = dialogRef.current;
+      if (!container) return;
+      const focusables = container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      if (focusables.length > 0) {
+        focusables[0].focus();
+      } else {
+        container.focus();
+      }
+    };
+
+    const frameId = requestAnimationFrame(focusFirst);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+
+      if (e.key !== 'Tab') return;
+      const container = dialogRef.current;
+      if (!container) return;
+      const focusables = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+      if (focusables.length === 0) return;
+
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+
+      if (e.shiftKey) {
+        if (active === first || !container.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !container.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      cancelAnimationFrame(frameId);
+      window.removeEventListener('keydown', handleKeyDown, true);
+      if (previousFocusRef.current && document.contains(previousFocusRef.current)) {
+        previousFocusRef.current.focus();
+      }
+    };
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-xs"
+      style={{ backgroundColor: 'var(--color-scrim)' }}
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-title"
     >
       <div
-        className="w-full max-w-2xl max-h-[86vh] flex flex-col rounded-xl bg-[#1c2026] border border-[#2a303a] p-5 sm:p-6 shadow-2xl"
+        ref={dialogRef}
+        tabIndex={-1}
+        className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-[var(--radius-lg)] bg-[var(--color-surface)] border border-[var(--color-border)] p-4 sm:p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between pb-3.5 border-b border-[#2a303a] shrink-0">
+        <div className="flex items-center justify-between gap-3 pb-3.5 border-b border-[var(--color-border-subtle)] shrink-0">
           <div>
-            <h2 id="modal-title" className="text-xl font-semibold text-white">
-              {mode === 'levels' ? 'Selector de niveles' : 'La regla única'}
+            <h2 id="modal-title" className="type-title text-xl font-bold text-[var(--color-text)]">
+              Controles
             </h2>
-            {mode === 'levels' && (
-              <p className="text-xs text-slate-400 mt-0.5 font-mono tabular-nums">
-                {LEVELS.length} disponibles (capacidad base hasta {MAX_SUPPORTED_LEVELS} niveles · {MAX_LAPS} vueltas)
-              </p>
-            )}
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Cerrar ventana"
-            className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0]"
+            className="btn-secondary p-0 w-9 h-9"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
 
-        {mode === 'levels' ? (
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 overflow-y-auto pr-1">
-            {LEVELS.map((lvl, idx) => {
-              const isCompleted = completedLevels.includes(lvl.id);
-              const isCurrent = idx === currentLevelIndex;
-              return (
-                <button
-                  key={lvl.id}
-                  type="button"
-                  onClick={() => {
-                    onSelectLevel(idx);
-                    onClose();
-                  }}
-                  aria-current={isCurrent ? 'true' : undefined}
-                  className={`text-left p-3.5 rounded-lg border transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4cc9f0] ${
-                    isCurrent
-                      ? 'bg-[#232830] border-[#4cc9f0]'
-                      : 'bg-[#14161a] border-[#2a303a] hover:border-slate-500'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <span className="text-xs font-medium text-slate-400 font-mono tabular-nums">
-                      Nivel {lvl.id} · {lvl.maxLaps} {lvl.maxLaps === 1 ? 'vuelta' : 'vueltas'}
-                    </span>
-                    {isCompleted && (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-[#80ed99]">
-                        <Check className="w-3.5 h-3.5" />
-                        Resuelto
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-base font-semibold text-white">{lvl.name}</div>
-                  <p className="mt-1 text-xs text-slate-400 leading-relaxed">{lvl.subtitle}</p>
-                  <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
-                    {Array.from({ length: lvl.maxLaps }).map((_, lIdx) => (
-                      <span
-                        key={lIdx}
-                        className="inline-flex items-center gap-1 text-[10px] font-mono text-slate-300"
-                      >
-                        <span
-                          className="h-1.5 w-4 rounded-xs block"
-                          style={{ backgroundColor: getLapColor(lIdx) }}
-                        />
-                        {getLapCode(lIdx)}
-                      </span>
-                    ))}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="mt-4 space-y-4 text-sm text-slate-300 overflow-y-auto pr-1">
-            <p className="text-base font-medium text-white">
-              El presente es blando. El pasado es duro.
-            </p>
-            <div className="overflow-hidden rounded-lg border border-[#2a303a]">
-              <table className="w-full text-left border-collapse text-xs sm:text-sm">
-                <thead>
-                  <tr className="bg-[#14161a] border-b border-[#2a303a] text-slate-400">
-                    <th className="py-2 px-3 font-medium">Elemento</th>
-                    <th className="py-2 px-3 font-medium">Presente (Blanco)</th>
-                    <th className="py-2 px-3 font-medium">Pasado (Fantasmas)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#2a303a]">
-                  <tr>
-                    <td className="py-2 px-3 text-white font-medium">Tu rastro</td>
-                    <td className="py-2 px-3 text-slate-300">No colisiona</td>
-                    <td className="py-2 px-3 text-[#4cc9f0]">Pared sólida</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3 text-white font-medium">Tu cuerpo</td>
-                    <td className="py-2 px-3 text-slate-300">Controlable</td>
-                    <td className="py-2 px-3 text-[#f72585]">Empuja y aplasta</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3 text-white font-medium">Placas y puertas</td>
-                    <td className="py-2 px-3 text-slate-300">Interactúa</td>
-                    <td className="py-2 px-3 text-[#ffd166]">También interactúa</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3 text-white font-medium">Láser</td>
-                    <td className="py-2 px-3 text-[#ff3b3b]">Te mata</td>
-                    <td className="py-2 px-3 text-[#80ed99]">El fantasma lo bloquea</td>
-                  </tr>
-                </tbody>
-              </table>
+        <div className="mt-4 overflow-y-auto pr-1">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+            <div className="p-2.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] border border-[var(--color-border-subtle)]">
+              <div className="type-numeric text-[var(--color-text)] font-semibold">WASD / Flechas</div>
+              <div className="text-[var(--color-text-muted)] mt-0.5">Mover al jugador</div>
             </div>
-
-            {/* 6-lap explicit non-cyclic color legend */}
-            <div className="p-3 rounded-lg bg-[#14161a] border border-[#2a303a]">
-              <div className="text-xs font-medium text-slate-300 mb-2">
-                Leyenda de vueltas (identificación explícita hasta {MAX_LAPS} vueltas)
-              </div>
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                {LAP_META.map((lap) => (
-                  <div
-                    key={lap.index}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded bg-[#1c2026] border border-[#2a303a] text-xs font-mono"
-                  >
-                    <span
-                      className="w-2.5 h-2.5 rounded-xs shrink-0"
-                      style={{ backgroundColor: lap.color }}
-                    />
-                    <span className="text-white font-semibold">{lap.code}</span>
-                  </div>
-                ))}
-              </div>
+            <div className="p-2.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] border border-[var(--color-border-subtle)]">
+              <div className="type-numeric text-[var(--color-text)] font-semibold">Espacio</div>
+              <div className="text-[var(--color-text-muted)] mt-0.5">Terminar vuelta actual</div>
             </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs">
-              <div className="p-2.5 rounded-lg bg-[#14161a] border border-[#2a303a]">
-                <div className="font-mono text-white font-medium">WASD / Flechas</div>
-                <div className="text-slate-400 mt-0.5">Caminar</div>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#14161a] border border-[#2a303a]">
-                <div className="font-mono text-white font-medium">Enter</div>
-                <div className="text-slate-400 mt-0.5">Terminar vuelta</div>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#14161a] border border-[#2a303a]">
-                <div className="font-mono text-white font-medium">Espacio</div>
-                <div className="text-slate-400 mt-0.5">Pausar</div>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#14161a] border border-[#2a303a]">
-                <div className="font-mono text-white font-medium">Mantener R</div>
-                <div className="text-slate-400 mt-0.5">Rebobinar gratis</div>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#14161a] border border-[#2a303a]">
-                <div className="font-mono text-white font-medium">Supr / Esc</div>
-                <div className="text-slate-400 mt-0.5">Reiniciar / Niveles</div>
-              </div>
+            <div className="p-2.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] border border-[var(--color-border-subtle)]">
+              <div className="type-numeric text-[var(--color-text)] font-semibold">Enter / Intro</div>
+              <div className="text-[var(--color-text-muted)] mt-0.5">Pausar / Reanudar</div>
+            </div>
+            <div className="p-2.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] border border-[var(--color-border-subtle)]">
+              <div className="type-numeric text-[var(--color-text)] font-semibold">Mantener R</div>
+              <div className="text-[var(--color-text-muted)] mt-0.5">Rebobinar continuo</div>
+            </div>
+            <div className="p-2.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] border border-[var(--color-border-subtle)]">
+              <div className="type-numeric text-[var(--color-text)] font-semibold">Supr</div>
+              <div className="text-[var(--color-text-muted)] mt-0.5">Reiniciar</div>
             </div>
           </div>
-        )}
+        </div>
+
+        <div className="mt-4 pt-3.5 border-t border-[var(--color-border-subtle)] flex items-center justify-end gap-2 shrink-0">
+          <button type="button" onClick={onClose} className="btn-primary text-sm">
+            Entendido
+          </button>
+        </div>
       </div>
     </div>
   );
