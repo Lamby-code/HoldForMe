@@ -8,17 +8,17 @@ export interface LapColorMeta {
 }
 
 /**
- * Six distinct, non-cyclic lap pigments (Chrono-Atelier mineral palette).
- * Every color satisfies WCAG 2.2 AA (>= 4.5:1 on dark surfaces and >= 4.5:1
- * beneath obsidian ink #0F0E0C for canvas V1-V6 badges).
+ * Six distinct, non-cyclic lap pigments (Tactile Sci-Fi Test Chamber palette).
+ * Every color satisfies WCAG 2.2 AA (>= 4.5:1 on dark surfaces and >= 7:1
+ * beneath obsidian-slate ink #0B1017 for canvas V1-V6 badges).
  */
 export const LAP_COLORS = [
-  '#56C2C6', // V1: Mineral Teal
-  '#F28482', // V2: Terracotta Coral
-  '#E9C46A', // V3: Ochre Brass
-  '#84D28A', // V4: Botanical Jade
-  '#F4A261', // V5: Burnished Apricot
-  '#B5A6F5', // V6: Slate Periwinkle
+  '#4ADEDE', // V1: Lab Cyan
+  '#FF7E79', // V2: Thermal Coral
+  '#F5C754', // V3: Test Amber
+  '#6CE59E', // V4: Bio Emerald
+  '#FFA65C', // V5: Plasma Apricot
+  '#B79CFF', // V6: Quantum Violet
 ] as const;
 
 export const LAP_LABELS = ['V1', 'V2', 'V3', 'V4', 'V5', 'V6'] as const;
@@ -38,46 +38,48 @@ export const LAP_META: readonly LapColorMeta[] = [
  */
 export const TOKENS = {
   color: {
-    // Structural neutrals (warm obsidian & basalt)
-    bg: '#0F0E0C',
-    bgGrid: '#1D1B17',
-    bgGridMajor: '#2A2620',
-    surface: '#191714',
-    surfaceAlt: '#23201B',
-    surfaceMuted: '#14120F',
-    border: '#786E5E',
-    borderSubtle: '#3A342C',
-    borderStrong: '#9A8E7A',
-    wall: '#36312A',
-    wallEdge: '#7D7362',
+    // Structural neutrals (cool dark titanium & test-chamber slate)
+    bg: '#0B1017',
+    bgGrid: '#15202E',
+    bgGridMajor: '#243449',
+    surface: '#121A24',
+    surfaceAlt: '#1B2635',
+    surfaceMuted: '#0E151E',
+    border: '#4C617A',
+    borderSubtle: '#243245',
+    borderStrong: '#6F89A8',
+    wall: '#273547',
+    wallTop: '#35475E',
+    wallShadow: '#161F2B',
+    wallEdge: '#6882A3',
 
     // Typography & focal accent
-    text: '#F5F1E8',
-    textMuted: '#B8AFA1',
-    inkOnAccent: '#0F0E0C',
-    accent: '#E5A93B',
-    accentHover: '#F0BE59',
-    focus: '#E5A93B',
+    text: '#EEF3F9',
+    textMuted: '#96A8BE',
+    inkOnAccent: '#0B1017',
+    accent: '#F5B041',
+    accentHover: '#FAC465',
+    focus: '#F5B041',
 
     // Temporal entities
-    present: '#FAF7F0',
-    rewind: '#6FD1C6',
-    goal: '#F2B84B',
+    present: '#F8FBFF',
+    rewind: '#5CE1E6',
+    goal: '#F5B942',
 
     // Interactive world mechanisms (paired with shape/label double-coding)
-    plateOff: '#8BB4CC',
-    plateOn: '#EAF5FC',
-    doorClosed: '#4A433A',
-    doorOpen: '#5AD4A6',
-    laserActive: '#FF6459',
-    laserCore: '#FFE4E0',
-    laserInactive: '#9E9588',
-    laserDisabled: '#5AD4A6',
-    laserBlocked: '#F2C14E',
-    switchPending: '#ADA395',
-    switchExpected: '#F2B84B',
-    switchOn: '#5AD4A6',
-    switchError: '#FF7066',
+    plateOff: '#6BAED6',
+    plateOn: '#8AF0FF',
+    doorClosed: '#2B3A4D',
+    doorOpen: '#3CE09B',
+    laserActive: '#FF4252',
+    laserCore: '#FFF2F4',
+    laserInactive: '#7E91A8',
+    laserDisabled: '#3CE09B',
+    laserBlocked: '#FFD15C',
+    switchPending: '#8A9DB5',
+    switchExpected: '#F5B942',
+    switchOn: '#3CE09B',
+    switchError: '#FF5C6C',
   },
   shape: {
     radiusSm: 6,

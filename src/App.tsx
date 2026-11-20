@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { LevelSelectorModal } from './components/LevelSelectorModal.tsx';
 import { TimelineBar } from './components/TimelineBar.tsx';
@@ -64,6 +66,35 @@ export default function App() {
 
   const [completedLevels, setCompletedLevels] = useState<number[]>(loadCompletedLevels);
   const [controlsOpen, setControlsOpen] = useState(false);
+  const [musicEnabled, setMusicEnabled] = useState<boolean>(() => sfx.musicEnabled);
+
+  // Unlock and start retro background music on the first user gesture
+  useEffect(() => {
+    if (!musicEnabled) return;
+    const unlock = () => {
+      sfx.startMusic();
+    };
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, [musicEnabled]);
+
+  // Gently soften music when paused or viewing controls modal
+  useEffect(() => {
+    sfx.setMusicDucked(paused || controlsOpen);
+  }, [paused, controlsOpen]);
+
+  const handleToggleMusic = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.blur();
+    setMusicEnabled((prev) => {
+      const next = !prev;
+      sfx.setMusicEnabled(next);
+      return next;
+    });
+  }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const resultOverlayRef = useRef<HTMLDivElement>(null);
@@ -401,6 +432,7 @@ export default function App() {
             showFuturePreview: false,
             isRewinding: rewinding,
             isPaused: pausedRef.current,
+            nowMs: now,
           });
         }
       }
@@ -478,7 +510,23 @@ export default function App() {
             )}
           </nav>
 
-          <div className="flex items-center gap-2 shrink-0" />
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleToggleMusic}
+              aria-pressed={musicEnabled}
+              aria-label={musicEnabled ? 'Silenciar música' : 'Activar música'}
+              title={musicEnabled ? 'Silenciar música' : 'Activar música'}
+              className="btn-secondary btn-controls text-xs px-2.5"
+            >
+              {musicEnabled ? (
+                <Volume2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              ) : (
+                <VolumeX className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              )}
+              <span>Música</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -489,7 +537,7 @@ export default function App() {
           onOpenControls={() => setControlsOpen(true)}
         />
       ) : (
-        <main className="flex-1 w-full max-w-[1008px] mx-auto px-4 sm:px-6 py-2 flex flex-col items-center justify-center">
+        <main className="lab-chamber-backdrop flex-1 w-full px-4 sm:px-6 py-2 flex flex-col items-center justify-center">
           <div className="w-full max-w-[960px] space-y-2">
             {/* Canvas Container (960x400 logical aspect 12:5) */}
             <div className="relative w-full aspect-[12/5] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] overflow-hidden shadow-xl">
