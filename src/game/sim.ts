@@ -158,7 +158,9 @@ export function getLevel(state: SimState): LevelDef {
 }
 
 export function dist(ax: number, ay: number, bx: number, by: number): number {
-  return Math.hypot(ax - bx, ay - by);
+  const dx = ax - bx;
+  const dy = ay - by;
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
 /**
@@ -203,6 +205,76 @@ export function getMovingLaserEndpoints(
   return { x1: ml.pointA.x, y1: ml.pointA.y, x2: ax, y2: ay, u };
 }
 
+interface SwitchEntryEvent {
+  tick: number;
+  swIdx: number;
+}
+
+interface CachedLapSwitchEvents {
+  length: number;
+  lastFrame: Frame | undefined;
+  events: SwitchEntryEvent[];
+}
+
+// WeakMap cache of outside->inside switch entry events per immutable Frame[] array and level sequence
+const lapSwitchEventsCache = new WeakMap<
+  readonly Frame[],
+  WeakMap<NonNullable<LevelDef['orderedSwitchSequence']>, CachedLapSwitchEvents>
+>();
+
+function extractSwitchEntryEvents(
+  frames: readonly Frame[],
+  sortedSwitches: NonNullable<LevelDef['orderedSwitchSequence']>['switches'],
+  thresholdSqs: number[]
+): SwitchEntryEvent[] {
+  const events: SwitchEntryEvent[] = [];
+  const swCount = sortedSwitches.length;
+
+  for (let i = 1; i < frames.length; i++) {
+    const prev = frames[i - 1];
+    const cur = frames[i];
+    // Stationary frame: outside->inside transition is mathematically impossible
+    if (prev.x === cur.x && prev.y === cur.y) continue;
+
+    for (let s = 0; s < swCount; s++) {
+      const sw = sortedSwitches[s];
+      const threshSq = thresholdSqs[s];
+      const pdx = prev.x - sw.x;
+      const pdy = prev.y - sw.y;
+      if (pdx * pdx + pdy * pdy <= threshSq) continue;
+
+      const cdx = cur.x - sw.x;
+      const cdy = cur.y - sw.y;
+      if (cdx * cdx + cdy * cdy <= threshSq) {
+        events.push({ tick: i, swIdx: s });
+      }
+    }
+  }
+  return events;
+}
+
+function getCachedLapSwitchEvents(
+  frames: readonly Frame[],
+  seq: NonNullable<LevelDef['orderedSwitchSequence']>,
+  sortedSwitches: NonNullable<LevelDef['orderedSwitchSequence']>['switches'],
+  thresholdSqs: number[]
+): SwitchEntryEvent[] {
+  let bySeq = lapSwitchEventsCache.get(frames);
+  const lastFrame = frames.length > 0 ? frames[frames.length - 1] : undefined;
+  if (bySeq) {
+    const cached = bySeq.get(seq);
+    if (cached && cached.length === frames.length && cached.lastFrame === lastFrame) {
+      return cached.events;
+    }
+  } else {
+    bySeq = new WeakMap();
+    lapSwitchEventsCache.set(frames, bySeq);
+  }
+  const events = extractSwitchEntryEvents(frames, sortedSwitches, thresholdSqs);
+  bySeq.set(seq, { length: frames.length, lastFrame, events });
+  return events;
+}
+
 /**
  * Pure deterministic evaluator for ordered switches, global sequence state, and laserSegments (D2, D3, D4).
  * Evaluates outside->inside transitions strictly from active player's chronological recorded frames
@@ -240,6 +312,10 @@ export function evaluateOrderedSequence(
 
   const sortedSwitches = [...seq.switches].sort((a, b) => a.order - b.order);
   const totalSteps = sortedSwitches.length;
+  const thresholdSqs = sortedSwitches.map((sw) => {
+    const t = sw.r + SWITCH_ACTIVATION_MARGIN;
+    return t * t;
+  });
 
   let currentStep = 0;
   let completed = false;
@@ -259,55 +335,55 @@ export function evaluateOrderedSequence(
     }
   };
 
-  const recordedLaps: ReadonlyArray<readonly Frame[]> = [...pastLaps, currentFrames];
-  for (let lapIdx = 0; lapIdx < recordedLaps.length; lapIdx++) {
-    const frames = recordedLaps[lapIdx];
-    for (let i = 1; i < frames.length; i++) {
-      const prev = frames[i - 1];
-      const cur = frames[i];
-
-      for (const sw of sortedSwitches) {
-        const threshold = sw.r + SWITCH_ACTIVATION_MARGIN;
-        const wasInside = dist(prev.x, prev.y, sw.x, sw.y) <= threshold;
-        const isInside = dist(cur.x, cur.y, sw.x, sw.y) <= threshold;
-
-        if (!wasInside && isInside) {
-          if (!completed && sw.order === currentStep + 1) {
-            currentStep += 1;
-            if (currentStep === totalSteps) {
-              completed = true;
-              lastEventType = 'complete';
-              for (const swItem of sortedSwitches) {
-                for (const segId of swItem.targetSegmentIds) {
-                  if (segmentInitial.has(segId)) {
-                    segmentEnabled[segId] = swItem.effect === 'enable';
-                  }
-                }
+  const applyEvents = (events: SwitchEntryEvent[]) => {
+    for (let e = 0; e < events.length; e++) {
+      const ev = events[e];
+      const sw = sortedSwitches[ev.swIdx];
+      if (!completed && sw.order === currentStep + 1) {
+        currentStep += 1;
+        if (currentStep === totalSteps) {
+          completed = true;
+          lastEventType = 'complete';
+          for (const swItem of sortedSwitches) {
+            for (const segId of swItem.targetSegmentIds) {
+              if (segmentInitial.has(segId)) {
+                segmentEnabled[segId] = swItem.effect === 'enable';
               }
-            } else {
-              lastEventType = 'advance';
             }
-          } else {
-            currentStep = 0;
-            completed = false;
-            errorCount += 1;
-            lastErrorTick = i;
-            lastErrorSwitchId = sw.id;
-            lastEventType = 'error';
-            restoreControlledSegments();
           }
+        } else {
+          lastEventType = 'advance';
         }
+      } else {
+        currentStep = 0;
+        completed = false;
+        errorCount += 1;
+        lastErrorTick = ev.tick;
+        lastErrorSwitchId = sw.id;
+        lastEventType = 'error';
+        restoreControlledSegments();
       }
     }
+  };
+
+  for (let lapIdx = 0; lapIdx < pastLaps.length; lapIdx++) {
+    const events = getCachedLapSwitchEvents(pastLaps[lapIdx], seq, sortedSwitches, thresholdSqs);
+    applyEvents(events);
   }
+  const currentEvents = getCachedLapSwitchEvents(currentFrames, seq, sortedSwitches, thresholdSqs);
+  applyEvents(currentEvents);
 
   const expectedOrder = completed ? null : currentStep + 1;
   const lastFrame = currentFrames.length > 0 ? currentFrames[currentFrames.length - 1] : null;
 
-  const derivedSwitches: DerivedOrderedSwitch[] = sortedSwitches.map((sw) => {
-    const threshold = sw.r + SWITCH_ACTIVATION_MARGIN;
+  const derivedSwitches: DerivedOrderedSwitch[] = sortedSwitches.map((sw, sIdx) => {
+    const threshSq = thresholdSqs[sIdx];
     const playerInside = Boolean(
-      !dead && lastFrame && dist(lastFrame.x, lastFrame.y, sw.x, sw.y) <= threshold
+      !dead &&
+        lastFrame &&
+        (lastFrame.x - sw.x) * (lastFrame.x - sw.x) +
+          (lastFrame.y - sw.y) * (lastFrame.y - sw.y) <=
+          threshSq
     );
     return {
       id: sw.id,
@@ -378,28 +454,45 @@ function closestPointOnSegment(
   const dy = by - ay;
   const lenSq = dx * dx + dy * dy;
   if (lenSq === 0) {
-    return { x: ax, y: ay, t: 0, dist: Math.hypot(px - ax, py - ay) };
+    const ex = px - ax;
+    const ey = py - ay;
+    return { x: ax, y: ay, t: 0, dist: Math.sqrt(ex * ex + ey * ey) };
   }
   let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
-  t = Math.max(0, Math.min(1, t));
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
   const cx = ax + t * dx;
   const cy = ay + t * dy;
-  return { x: cx, y: cy, t, dist: Math.hypot(px - cx, py - cy) };
+  const ex = px - cx;
+  const ey = py - cy;
+  return { x: cx, y: cy, t, dist: Math.sqrt(ex * ex + ey * ey) };
 }
 
-export function deriveWorld(state: SimState): DerivedWorld {
+const derivedWorldCache = new WeakMap<SimState, DerivedWorld>();
+
+function computeDerivedWorld(
+  state: SimState,
+  precomputedSequence?: DerivedSequenceState
+): DerivedWorld {
   const level = getLevel(state);
   const ghosts = getActiveGhosts(state);
 
   const pressedPlates = new Set<string>();
   for (const plate of level.plates) {
     const threshold = plate.r + 4;
+    const thresholdSq = threshold * threshold;
     let isPressed = false;
-    if (!state.dead && dist(state.player.x, state.player.y, plate.x, plate.y) <= threshold) {
-      isPressed = true;
-    } else {
+    if (!state.dead) {
+      const pdx = state.player.x - plate.x;
+      const pdy = state.player.y - plate.y;
+      if (pdx * pdx + pdy * pdy <= thresholdSq) {
+        isPressed = true;
+      }
+    }
+    if (!isPressed) {
       for (const g of ghosts) {
-        if (dist(g.x, g.y, plate.x, plate.y) <= threshold) {
+        const gdx = g.x - plate.x;
+        const gdy = g.y - plate.y;
+        if (gdx * gdx + gdy * gdy <= thresholdSq) {
           isPressed = true;
           break;
         }
@@ -414,7 +507,8 @@ export function deriveWorld(state: SimState): DerivedWorld {
     if (allPressed) openDoors.add(door.id);
   }
 
-  const sequence = evaluateOrderedSequence(level, state.current, state.dead, state.laps);
+  const sequence =
+    precomputedSequence ?? evaluateOrderedSequence(level, state.current, state.dead, state.laps);
 
   const baseLasers: Array<{
     id: string;
@@ -632,18 +726,29 @@ export function deriveWorld(state: SimState): DerivedWorld {
     }
   }
 
-  const won =
-    !state.dead &&
-    dist(state.player.x, state.player.y, level.goal.x, level.goal.y) <=
-      state.player.r + level.goal.r;
+  const goalDist = state.player.r + level.goal.r;
+  const gdx = state.player.x - level.goal.x;
+  const gdy = state.player.y - level.goal.y;
+  const won = !state.dead && gdx * gdx + gdy * gdy <= goalDist * goalDist;
 
   return { level, ghosts, pressedPlates, openDoors, lasers, sequence, won };
+}
+
+export function deriveWorld(state: SimState): DerivedWorld {
+  const cached = derivedWorldCache.get(state);
+  if (cached) return cached;
+  const derived = computeDerivedWorld(state);
+  derivedWorldCache.set(state, derived);
+  return derived;
 }
 
 export function isWon(state: SimState): boolean {
   if (state.dead) return false;
   const level = getLevel(state);
-  return dist(state.player.x, state.player.y, level.goal.x, level.goal.y) <= state.player.r + level.goal.r;
+  const goalDist = state.player.r + level.goal.r;
+  const dx = state.player.x - level.goal.x;
+  const dy = state.player.y - level.goal.y;
+  return dx * dx + dy * dy <= goalDist * goalDist;
 }
 
 function resolveCircleRectAxis(
@@ -688,32 +793,94 @@ function resolveCircleRectAxis(
   return { x: x + (dx / d) * overlap, y: y + (dy / d) * overlap };
 }
 
+interface TrailCapsule {
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+interface CachedTrailCapsules {
+  spawnX: number;
+  spawnY: number;
+  length: number;
+  lastFrame: Frame | undefined;
+  capsules: TrailCapsule[];
+}
+
+const trailCapsulesCache = new WeakMap<readonly Frame[], CachedTrailCapsules>();
+
 export function getTrailCapsules(
   frames: Frame[],
   spawn: { x: number; y: number }
-): Array<{ ax: number; ay: number; bx: number; by: number }> {
-  const capsules: Array<{ ax: number; ay: number; bx: number; by: number }> = [];
+): TrailCapsule[] {
+  const lastFrame = frames.length > 0 ? frames[frames.length - 1] : undefined;
+  const cached = trailCapsulesCache.get(frames);
+  if (
+    cached &&
+    cached.spawnX === spawn.x &&
+    cached.spawnY === spawn.y &&
+    cached.length === frames.length &&
+    cached.lastFrame === lastFrame
+  ) {
+    return cached.capsules;
+  }
+
+  const capsules: TrailCapsule[] = [];
   if (frames.length < 2) return capsules;
+
+  const safeRadiusSq = SPAWN_SAFE_RADIUS * SPAWN_SAFE_RADIUS;
+
+  const pushIfOutside = (a: Frame, b: Frame) => {
+    // Deduplicate stacked zero-length capsules when ghost stands still at the same point
+    if (a.x === b.x && a.y === b.y && capsules.length > 0) {
+      const prevCap = capsules[capsules.length - 1];
+      if (prevCap.bx === b.x && prevCap.by === b.y) {
+        return;
+      }
+    }
+    const midX = (a.x + b.x) * 0.5;
+    const midY = (a.y + b.y) * 0.5;
+    const dx = midX - spawn.x;
+    const dy = midY - spawn.y;
+    if (dx * dx + dy * dy > safeRadiusSq) {
+      capsules.push({
+        ax: a.x,
+        ay: a.y,
+        bx: b.x,
+        by: b.y,
+        minX: a.x < b.x ? a.x : b.x,
+        maxX: a.x > b.x ? a.x : b.x,
+        minY: a.y < b.y ? a.y : b.y,
+        maxY: a.y > b.y ? a.y : b.y,
+      });
+    }
+  };
 
   let prev = frames[0];
   for (let i = TRAIL_SAMPLE_INTERVAL; i < frames.length; i += TRAIL_SAMPLE_INTERVAL) {
     const cur = frames[i];
-    const midX = (prev.x + cur.x) * 0.5;
-    const midY = (prev.y + cur.y) * 0.5;
-    if (dist(midX, midY, spawn.x, spawn.y) > SPAWN_SAFE_RADIUS) {
-      capsules.push({ ax: prev.x, ay: prev.y, bx: cur.x, by: cur.y });
-    }
+    pushIfOutside(prev, cur);
     prev = cur;
   }
 
   const last = frames[frames.length - 1];
   if (last !== prev) {
-    const midX = (prev.x + last.x) * 0.5;
-    const midY = (prev.y + last.y) * 0.5;
-    if (dist(midX, midY, spawn.x, spawn.y) > SPAWN_SAFE_RADIUS) {
-      capsules.push({ ax: prev.x, ay: prev.y, bx: last.x, by: last.y });
-    }
+    pushIfOutside(prev, last);
   }
+
+  trailCapsulesCache.set(frames, {
+    spawnX: spawn.x,
+    spawnY: spawn.y,
+    length: frames.length,
+    lastFrame,
+    capsules,
+  });
+
   return capsules;
 }
 
@@ -722,7 +889,7 @@ function resolveSolidGeometry(
   y: number,
   r: number,
   rects: Rect[],
-  trailCapsules: Array<{ ax: number; ay: number; bx: number; by: number }>,
+  trailCapsules: TrailCapsule[],
   moveX: number,
   moveY: number
 ): { x: number; y: number } {
@@ -746,27 +913,41 @@ function resolveSolidGeometry(
     }
   }
 
-  // Circle vs past trail capsules
-  const minCenterDist = r + TRAIL_HALF_WIDTH;
-  for (let pass = 0; pass < RESOLVE_PASSES; pass++) {
-    for (const cap of trailCapsules) {
-      const hit = closestPointOnSegment(px, py, cap.ax, cap.ay, cap.bx, cap.by);
-      if (hit.dist < minCenterDist) {
-        if (hit.dist > 1e-6) {
-          const push = minCenterDist - hit.dist;
-          px += ((px - hit.x) / hit.dist) * push;
-          py += ((py - hit.y) / hit.dist) * push;
-        } else {
-          px += minCenterDist;
+  // Circle vs past trail capsules (with fast AABB bounding-box rejection)
+  if (trailCapsules.length > 0) {
+    const minCenterDist = r + TRAIL_HALF_WIDTH;
+    for (let pass = 0; pass < RESOLVE_PASSES; pass++) {
+      let pushed = false;
+      for (let i = 0; i < trailCapsules.length; i++) {
+        const cap = trailCapsules[i];
+        if (
+          px < cap.minX - minCenterDist ||
+          px > cap.maxX + minCenterDist ||
+          py < cap.minY - minCenterDist ||
+          py > cap.maxY + minCenterDist
+        ) {
+          continue;
+        }
+        const hit = closestPointOnSegment(px, py, cap.ax, cap.ay, cap.bx, cap.by);
+        if (hit.dist < minCenterDist) {
+          pushed = true;
+          if (hit.dist > 1e-6) {
+            const push = minCenterDist - hit.dist;
+            px += ((px - hit.x) / hit.dist) * push;
+            py += ((py - hit.y) / hit.dist) * push;
+          } else {
+            px += minCenterDist;
+          }
         }
       }
-    }
-    // Re-check walls after trail push on both axes
-    for (const rect of rects) {
-      const rx = resolveCircleRectAxis(px, py, r, rect, 'x');
-      const ry = resolveCircleRectAxis(rx.x, rx.y, r, rect, 'y');
-      px = ry.x;
-      py = ry.y;
+      if (!pushed) break;
+      // Re-check walls after trail push on both axes
+      for (const rect of rects) {
+        const rx = resolveCircleRectAxis(px, py, r, rect, 'x');
+        const ry = resolveCircleRectAxis(rx.x, rx.y, r, rect, 'y');
+        px = ry.x;
+        py = ry.y;
+      }
     }
   }
 
@@ -778,17 +959,28 @@ function checkGeometryOverlap(
   py: number,
   r: number,
   rects: Rect[],
-  trailCapsules: Array<{ ax: number; ay: number; bx: number; by: number }>
+  trailCapsules: TrailCapsule[]
 ): boolean {
   const tolerance = 2.0;
+  const rTolSq = (r - tolerance) * (r - tolerance);
   for (const rect of rects) {
     const closestX = Math.max(rect.x, Math.min(px, rect.x + rect.w));
     const closestY = Math.max(rect.y, Math.min(py, rect.y + rect.h));
-    const d = Math.hypot(px - closestX, py - closestY);
-    if (d < r - tolerance) return true;
+    const dx = px - closestX;
+    const dy = py - closestY;
+    if (dx * dx + dy * dy < rTolSq) return true;
   }
   const minDist = r + TRAIL_HALF_WIDTH - tolerance;
-  for (const cap of trailCapsules) {
+  for (let i = 0; i < trailCapsules.length; i++) {
+    const cap = trailCapsules[i];
+    if (
+      px < cap.minX - minDist ||
+      px > cap.maxX + minDist ||
+      py < cap.minY - minDist ||
+      py > cap.maxY + minDist
+    ) {
+      continue;
+    }
     const hit = closestPointOnSegment(px, py, cap.ax, cap.ay, cap.bx, cap.by);
     if (hit.dist < minDist) return true;
   }
@@ -812,7 +1004,7 @@ export function stepSim(state: SimState, input: InputState): SimState {
   // Movement vector
   let ix = (input.right ? 1 : 0) - (input.left ? 1 : 0);
   let iy = (input.down ? 1 : 0) - (input.up ? 1 : 0);
-  const mag = Math.hypot(ix, iy);
+  const mag = Math.sqrt(ix * ix + iy * iy);
   let moveX = 0;
   let moveY = 0;
   let angle = state.player.angle;
@@ -833,10 +1025,13 @@ export function stepSim(state: SimState, input: InputState): SimState {
     }
   }
 
-  // Collect solid trail capsules from all completed past laps
-  const trailCapsules: Array<{ ax: number; ay: number; bx: number; by: number }> = [];
+  // Collect solid trail capsules from all completed past laps (cached per immutable lap)
+  const trailCapsules: TrailCapsule[] = [];
   for (let i = 0; i < state.lap; i++) {
-    trailCapsules.push(...getTrailCapsules(state.laps[i], level.spawn));
+    const lapCaps = getTrailCapsules(state.laps[i], level.spawn);
+    for (let c = 0; c < lapCaps.length; c++) {
+      trailCapsules.push(lapCaps[c]);
+    }
   }
 
   // 1. Resolve player movement against walls, closed doors, and past trails
@@ -851,16 +1046,19 @@ export function stepSim(state: SimState, input: InputState): SimState {
   );
 
   // 2. Resolve player vs active solid ghosts outside the spawn pad (circle-circle push-out)
-  const ghosts = getActiveGhosts(state).filter(
-    (g) => dist(g.x, g.y, level.spawn.x, level.spawn.y) >= SPAWN_SAFE_RADIUS
-  );
+  const safeRadiusSq = SPAWN_SAFE_RADIUS * SPAWN_SAFE_RADIUS;
+  const ghosts = preWorld.ghosts.filter((g) => {
+    const dx = g.x - level.spawn.x;
+    const dy = g.y - level.spawn.y;
+    return dx * dx + dy * dy >= safeRadiusSq;
+  });
   const ghostMinDist = state.player.r + PLAYER_RADIUS;
   let touchedGhostLap: number | null = null;
 
   for (const g of ghosts) {
     const dx = resolved.x - g.x;
     const dy = resolved.y - g.y;
-    const d = Math.hypot(dx, dy);
+    const d = Math.sqrt(dx * dx + dy * dy);
     if (d < ghostMinDist) {
       touchedGhostLap = g.lapIndex;
       if (d > 1e-5) {
@@ -921,10 +1119,11 @@ export function stepSim(state: SimState, input: InputState): SimState {
     ...state,
     player: { ...state.player, x: resolved.x, y: resolved.y, angle },
   };
-  const postWorld = deriveWorld({
+  const postStateForLaser: SimState = {
     ...nextPlayerState,
     current: recordedCurrent,
-  });
+  };
+  const postWorld = deriveWorld(postStateForLaser);
 
   for (const laser of postWorld.lasers) {
     if (!laser.active) continue;
@@ -1080,15 +1279,195 @@ export function finishCurrentLap(state: SimState): SimState {
   const level = getLevel(state);
   if (state.lap + 1 >= level.maxLaps) return state;
 
-  const startLap = state.lap;
-  const idle: InputState = { up: false, down: false, left: false, right: false };
-  let cur = state;
-  let guard = 0;
-  while (cur.lap === startLap && !cur.dead && !isWon(cur) && guard <= FRAMES_PER_LAP) {
-    cur = stepSim(cur, idle);
-    guard++;
+  // Build reusable trail capsules once for the entire fast-forward (past laps are immutable)
+  const trailCapsules: TrailCapsule[] = [];
+  for (let i = 0; i < state.lap; i++) {
+    const lapCaps = getTrailCapsules(state.laps[i], level.spawn);
+    for (let c = 0; c < lapCaps.length; c++) {
+      trailCapsules.push(lapCaps[c]);
+    }
   }
-  return cur;
+
+  // Single mutable copy of current frames during fast-forward (avoids O(N^2) slice cloning)
+  const workingCurrent: Frame[] = state.current.slice(0, state.t + 1);
+  let curT = state.t;
+  let px = state.player.x;
+  let py = state.player.y;
+  const pr = state.player.r;
+  const angle = state.player.angle;
+
+  const safeRadiusSq = SPAWN_SAFE_RADIUS * SPAWN_SAFE_RADIUS;
+  const ghostMinDist = pr + PLAYER_RADIUS;
+
+  // Evaluate sequence once upfront; only re-evaluate if player is physically pushed by a ghost
+  let cachedSeq = evaluateOrderedSequence(level, workingCurrent, false, state.laps);
+
+  let guard = 0;
+  while (curT < FRAMES_PER_LAP && guard <= FRAMES_PER_LAP) {
+    guard++;
+
+    const stepState: SimState = {
+      ...state,
+      t: curT,
+      player: { x: px, y: py, r: pr, angle },
+      current: workingCurrent,
+    };
+    const preWorld = computeDerivedWorld(stepState, cachedSeq);
+
+    const solidRects: Rect[] = [...level.walls];
+    for (const door of level.doors) {
+      if (!preWorld.openDoors.has(door.id)) {
+        solidRects.push({ x: door.x, y: door.y, w: door.w, h: door.h });
+      }
+    }
+
+    // 1. Resolve idle player against walls, closed doors, and past trails
+    let resolved = resolveSolidGeometry(px, py, pr, solidRects, trailCapsules, 0, 0);
+
+    // 2. Resolve player vs active solid ghosts outside spawn pad
+    const ghosts = preWorld.ghosts.filter((g) => {
+      const dx = g.x - level.spawn.x;
+      const dy = g.y - level.spawn.y;
+      return dx * dx + dy * dy >= safeRadiusSq;
+    });
+
+    let touchedGhostLap: number | null = null;
+    for (const g of ghosts) {
+      const dx = resolved.x - g.x;
+      const dy = resolved.y - g.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < ghostMinDist) {
+        touchedGhostLap = g.lapIndex;
+        if (d > 1e-5) {
+          const push = ghostMinDist - d;
+          resolved.x += (dx / d) * push;
+          resolved.y += (dy / d) * push;
+        } else {
+          resolved.x += Math.cos(g.angle) * ghostMinDist || ghostMinDist;
+          resolved.y += Math.sin(g.angle) * ghostMinDist;
+        }
+      }
+    }
+
+    // 3. Re-resolve walls/trails after ghost push-out
+    if (touchedGhostLap !== null) {
+      resolved = resolveSolidGeometry(
+        resolved.x,
+        resolved.y,
+        pr,
+        solidRects,
+        trailCapsules,
+        0,
+        0
+      );
+    }
+
+    // 4. Detect crush
+    let crushedByLap: number | null = null;
+    for (const g of ghosts) {
+      const d = dist(resolved.x, resolved.y, g.x, g.y);
+      if (d < ghostMinDist - 2.0) {
+        crushedByLap = g.lapIndex;
+        break;
+      }
+    }
+    if (crushedByLap === null && touchedGhostLap !== null) {
+      if (checkGeometryOverlap(resolved.x, resolved.y, pr, solidRects, trailCapsules)) {
+        crushedByLap = touchedGhostLap;
+      }
+    }
+
+    if (crushedByLap !== null) {
+      return {
+        ...state,
+        t: curT,
+        player: { x: resolved.x, y: resolved.y, r: pr, angle },
+        current: workingCurrent.slice(),
+        dead: true,
+        cause: 'crush',
+        culpritLap: crushedByLap,
+        deathTimer: 0,
+      };
+    }
+
+    // 5. Record frame & re-evaluate sequence ONLY if player actually moved
+    const moved = resolved.x !== px || resolved.y !== py;
+    workingCurrent.push({ x: resolved.x, y: resolved.y, angle });
+    px = resolved.x;
+    py = resolved.y;
+
+    if (moved && cachedSeq.present) {
+      cachedSeq = evaluateOrderedSequence(level, workingCurrent, false, state.laps);
+    }
+
+    const postStepState: SimState = {
+      ...state,
+      t: curT,
+      player: { x: px, y: py, r: pr, angle },
+      current: workingCurrent,
+    };
+    const postWorld = computeDerivedWorld(postStepState, cachedSeq);
+
+    for (const laser of postWorld.lasers) {
+      if (!laser.active) continue;
+      const hit = closestPointOnSegment(px, py, laser.x1, laser.y1, laser.x2, laser.y2);
+      if (hit.dist <= pr + LASER_BEAM_HALF_WIDTH - 2) {
+        workingCurrent.pop();
+        return {
+          ...state,
+          t: curT,
+          player: { x: px, y: py, r: pr, angle },
+          current: workingCurrent.slice(),
+          dead: true,
+          cause: 'laser',
+          culpritLap: null,
+          deathTimer: 0,
+        };
+      }
+    }
+
+    // 6. Check goal win
+    if (postWorld.won) {
+      return {
+        ...state,
+        t: curT,
+        player: { x: px, y: py, r: pr, angle },
+        current: workingCurrent.slice(),
+        dead: false,
+        cause: null,
+        culpritLap: null,
+        deathTimer: 0,
+      };
+    }
+
+    // 7. Advance frame / complete lap transition
+    const nextT = curT + 1;
+    if (nextT >= FRAMES_PER_LAP) {
+      const nextLaps = [...state.laps, workingCurrent];
+      const spawnFrame: Frame = { x: level.spawn.x, y: level.spawn.y, angle: 0 };
+      return {
+        ...state,
+        lap: state.lap + 1,
+        t: 0,
+        player: {
+          x: level.spawn.x,
+          y: level.spawn.y,
+          r: PLAYER_RADIUS,
+          angle: 0,
+        },
+        laps: nextLaps,
+        current: [spawnFrame],
+        dead: false,
+        cause: null,
+        culpritLap: null,
+        deathTimer: 0,
+      };
+    }
+
+    curT = nextT;
+  }
+
+  return state;
 }
 
 export function getDeathMessage(state: SimState): string {
