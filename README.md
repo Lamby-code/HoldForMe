@@ -15,6 +15,27 @@ Puzzle 2D top-down donde cada vuelta de 20 segundos graba a un fantasma sólido 
 | Reiniciar nivel | `Supr` |
 | Selector de niveles | `Esc` |
 
+## Desarrollo local
+
+Requisitos: Node.js y npm.
+
+```bash
+npm install --legacy-peer-deps
+npm run dev
+```
+
+App de desarrollo: http://localhost:3000
+
+## Verificación
+
+```bash
+node --test
+npm run lint
+npm run build
+```
+
+> Nota: `npm run lint` ejecuta `tsc --noEmit` (typecheck).
+
 ## Publicar en GitHub Pages
 
 Este proyecto compila a una webapp estática pura con rutas relativas (`base: './'` en `vite.config.ts`). **No** debe apuntar a la raíz del repositorio con *"Deploy from a branch"*, porque el navegador no puede ejecutar `/src/main.tsx` sin compilar.
@@ -24,7 +45,7 @@ El repositorio incluye el workflow automático `.github/workflows/deploy.yml`:
 1. Subí el repositorio a GitHub.
 2. En tu repositorio, entrá a **Settings → Pages**.
 3. En **Build and deployment → Source**, elegí **GitHub Actions** (en lugar de *Deploy from a branch*).
-4. Cada `push` (o ejecución manual en la pestaña **Actions**) compilará `dist/` y publicará el juego listo para abrir en el navegador.
+4. Cada `push` (o ejecución manual en la pestaña **Actions**) ejecutará checks, compilará `dist/` y publicará el juego.
 
 Para probar el build localmente:
 
@@ -33,3 +54,9 @@ npm install --legacy-peer-deps
 npm run build
 npm run preview
 ```
+
+## Gobierno del proyecto
+
+- Lee `AGENTS.md`, `docs/constitution.md` y `MEMORY.md`.
+- Las especificaciones viven en `specs/NNN-nombre/` (`spec.md`, `plan.md`, `tasks.md`, `handoff.md`).
+- La implementación se realiza en Google AI Studio a partir de specs aprobadas; el agente `tester` revisa y valida. No hay agente `programmer`.
