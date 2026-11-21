@@ -125,7 +125,7 @@ export default function App() {
   }, []);
 
   const resetLevel = useCallback(
-    (targetIdx = levelIndex) => {
+    (targetIdx = levelIndex, options?: { showLevel1Controls?: boolean }) => {
       if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
       }
@@ -138,6 +138,9 @@ export default function App() {
       setPaused(false);
       setOverlayDismissed(false);
       setScreen('play');
+      if (options?.showLevel1Controls && targetIdx === 0) {
+        setControlsOpen(true);
+      }
       syncState(fresh);
     },
     [levelIndex, syncState]
@@ -477,7 +480,10 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => setControlsOpen(true)}
+              onClick={(e) => {
+                e.currentTarget.blur();
+                setControlsOpen(true);
+              }}
               className="btn-nav"
             >
               Controles
@@ -488,7 +494,9 @@ export default function App() {
                 <button
                   type="button"
                   disabled={levelIndex <= 0}
-                  onClick={() => resetLevel(levelIndex - 1)}
+                  onClick={() =>
+                    resetLevel(levelIndex - 1, { showLevel1Controls: true })
+                  }
                   aria-label="Nivel anterior"
                   className="btn-secondary p-0 w-8 h-8"
                 >
@@ -533,7 +541,7 @@ export default function App() {
       {screen === 'menu' ? (
         <TitleMenu
           completedLevels={completedLevels}
-          onStart={(idx = 0) => resetLevel(idx)}
+          onStart={(idx = 0) => resetLevel(idx, { showLevel1Controls: true })}
           onOpenControls={() => setControlsOpen(true)}
         />
       ) : (

@@ -14,6 +14,7 @@ export const LevelSelectorModal: React.FC<LevelSelectorModalProps> = ({
   onClose,
 }) => {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const confirmBtnRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -23,6 +24,10 @@ export const LevelSelectorModal: React.FC<LevelSelectorModalProps> = ({
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
     const focusFirst = () => {
+      if (confirmBtnRef.current) {
+        confirmBtnRef.current.focus();
+        return;
+      }
       const container = dialogRef.current;
       if (!container) return;
       const focusables = container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
@@ -127,13 +132,18 @@ export const LevelSelectorModal: React.FC<LevelSelectorModalProps> = ({
             </div>
             <div className="p-2.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] border border-[var(--color-border-subtle)]">
               <div className="type-numeric text-[var(--color-text)] font-semibold">Supr</div>
-              <div className="text-[var(--color-text-muted)] mt-0.5">Reiniciar</div>
+              <div className="text-[var(--color-text-muted)] mt-0.5">Reiniciar nivel</div>
             </div>
           </div>
         </div>
 
         <div className="mt-4 pt-3.5 border-t border-[var(--color-border-subtle)] flex items-center justify-end gap-2 shrink-0">
-          <button type="button" onClick={onClose} className="btn-primary text-sm">
+          <button
+            ref={confirmBtnRef}
+            type="button"
+            onClick={onClose}
+            className="btn-primary text-sm"
+          >
             Entendido
           </button>
         </div>

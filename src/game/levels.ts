@@ -149,8 +149,8 @@ const PERIMETER_WALLS: Rect[] = [
 export const LEVELS: LevelDef[] = [
   {
     id: 1,
-    name: 'Caminar',
-    subtitle: 'Un cuarto, una meta, sin fantasmas.',
+    name: 'El pilar',
+    subtitle: 'Un cuarto, un pilar central, sin fantasmas.',
     maxLaps: 1,
     hint: 'Usá WASD o las flechas para rodear el pilar y llegar a la meta dorada.',
     spawn: { x: 120, y: 200 },
@@ -165,10 +165,10 @@ export const LEVELS: LevelDef[] = [
   },
   {
     id: 2,
-    name: 'El sostén',
+    name: 'Sostén la puerta',
     subtitle: 'Tu vuelta anterior puede sostener una placa por vos.',
     maxLaps: 2,
-    hint: 'Vuelta 1: parate sobre la placa A y terminá la vuelta (Enter). Vuelta 2: rodeá tu rastro sólido y cruzá la puerta.',
+    hint: 'Vuelta 1: parate sobre la placa A y terminá la vuelta (Espacio). Vuelta 2: rodeá tu rastro sólido y cruzá la puerta.',
     spawn: { x: 120, y: 200 },
     goal: { x: 830, y: 200, r: 24 },
     walls: [
@@ -186,10 +186,10 @@ export const LEVELS: LevelDef[] = [
   },
   {
     id: 3,
-    name: 'El relevo',
-    subtitle: 'Repartí trabajos y encadená tres vueltas.',
+    name: 'Doble compuerta',
+    subtitle: 'Repartí tareas y encadená dos compuertas en tres vueltas.',
     maxLaps: 3,
-    hint: 'Vuelta 1 sostiene A (abre Puerta 1). Vuelta 2 cruza a B y la sostiene. Vuelta 3 entra con ambas puertas abiertas.',
+    hint: 'Vuelta 1 sostiene A (abre Puerta 1). Vuelta 2 cruza a B y la sostiene. Vuelta 3 pasa con ambas puertas abiertas.',
     spawn: { x: 110, y: 280 },
     goal: { x: 826, y: 210, r: 24 },
     walls: [
@@ -211,8 +211,8 @@ export const LEVELS: LevelDef[] = [
   },
   {
     id: 4,
-    name: 'La cuadrilla',
-    subtitle: 'Relevo y bloqueo de láser en tres vueltas.',
+    name: 'Doble cubierta',
+    subtitle: 'Bahía superior de placa y bloqueo de láser abajo en tres vueltas.',
     maxLaps: 3,
     hint: 'Vuelta 1 sostiene A ~7 s y baja a tapar el láser L1. Vuelta 2 cruza Puerta 1 y sostiene B. Vuelta 3 pasa bajo el bloqueo hacia la meta.',
     spawn: { x: 150, y: 240 },
@@ -238,10 +238,10 @@ export const LEVELS: LevelDef[] = [
   },
   {
     id: 5,
-    name: 'El pulso',
-    subtitle: 'Un haz que va y viene marca tu momento.',
+    name: 'Túnel de barrido',
+    subtitle: 'Un haz que barre desde abajo marca el ritmo del cruce.',
     maxLaps: 2,
-    hint: 'El láser se mueve con ritmo fijo. Usá tus vueltas para sostener el paso y cruzar en el momento justo.',
+    hint: 'El láser barre con ritmo fijo. Usá tus vueltas para sostener el paso y cruzar el túnel en el momento justo.',
     spawn: { x: 100, y: 200 },
     goal: { x: 848, y: 200, r: 24 },
     walls: [
@@ -274,10 +274,10 @@ export const LEVELS: LevelDef[] = [
   },
   {
     id: 6,
-    name: 'Orden correcto',
-    subtitle: 'No todo botón se aprieta cuando querés.',
+    name: 'Sala de secuencia',
+    subtitle: 'Activá los interruptores de la sala estrictamente en orden.',
     maxLaps: 2,
-    hint: 'Activá los interruptores en orden. Si te equivocás, la secuencia vuelve a empezar.',
+    hint: 'Activá los interruptores en orden numérico. Si te equivocás, la secuencia vuelve a empezar.',
     spawn: { x: 100, y: 200 },
     goal: { x: 830, y: 200, r: 24 },
     walls: [
@@ -328,10 +328,10 @@ export const LEVELS: LevelDef[] = [
   },
   {
     id: 7,
-    name: 'Sincronía',
-    subtitle: 'Ritmo, orden y una última pasada limpia.',
+    name: 'El desafío',
+    subtitle: 'Tres interruptores, un láser segmentado y un pasillo de barrido.',
     maxLaps: 3,
-    hint: 'Sincronizá tus vueltas: primero dejá el camino listo, después cruzá sin romper el orden.',
+    hint: 'Sincronizá tus vueltas: primero completá la secuencia y después cruzá el pasillo a tiempo.',
     spawn: { x: 96, y: 200 },
     goal: { x: 868, y: 200, r: 24 },
     walls: [
@@ -410,10 +410,10 @@ export const LEVELS: LevelDef[] = [
   },
   {
     id: 8,
-    name: 'La herradura',
-    subtitle: 'Ida por arriba, vuelta medida por abajo.',
+    name: 'La horquilla',
+    subtitle: 'Ida por el piso superior, vuelta medida por abajo.',
     maxLaps: 3,
-    hint: 'Cruzá el giro siguiendo el péndulo y completá el orden entre ambos pisos.',
+    hint: 'Rodeá el haz móvil en el giro del fondo y completá el orden entre ambos pisos.',
     spawn: { x: 96, y: 88 },
     goal: { x: 96, y: 312, r: 24 },
     walls: [
@@ -478,8 +478,8 @@ export const LEVELS: LevelDef[] = [
   },
   {
     id: 9,
-    name: 'Cámaras cruzadas',
-    subtitle: 'Tres columnas, un corte horizontal y una caída final.',
+    name: 'Tres columnas',
+    subtitle: 'Tres cámaras escalonadas, un láser horizontal y una caída final.',
     maxLaps: 3,
     hint: 'Desactivá el láser horizontal en la cámara central y bajá a la meta cuando el haz se aparte.',
     spawn: { x: 96, y: 312 },
@@ -556,10 +556,10 @@ export const LEVELS: LevelDef[] = [
   },
   {
     id: 10,
-    name: 'Última coordinación',
-    subtitle: 'Dos alas, un nodo focal y una sola entrada a la bóveda.',
+    name: 'Bóveda gemela',
+    subtitle: 'Alas superior e inferior convergiendo en una bóveda protegida.',
     maxLaps: 3,
-    hint: 'Subí por el ala superior para apagar L1, bloqueá el abanico en su nodo y abrí la bóveda con B.',
+    hint: 'Subí por el ala superior para apagar L1, atravesá el abanico móvil y abrí la bóveda con B.',
     spawn: { x: 100, y: 200 },
     goal: { x: 856, y: 200, r: 24 },
     walls: [
