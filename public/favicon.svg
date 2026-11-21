@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Hold For Me">
+  <rect width="64" height="64" rx="14" fill="#0B1017" />
+  <!-- Temporal loop: the 20 s recording -->
+  <circle cx="32" cy="32" r="20" fill="none" stroke="#4ADEDE" stroke-width="4" />
+  <path d="M 45 11 L 54 15 L 47 22 Z" fill="#4ADEDE" />
+  <!-- Recorded past self (solid ghost) -->
+  <path d="M 22 45 V 31 a 10 10 0 0 1 20 0 v 14 l -5 -4 -5 4 -5 -4 z" fill="#F8FBFF" />
+  <circle cx="28.5" cy="31" r="1.7" fill="#0B1017" />
+  <circle cx="35.5" cy="31" r="1.7" fill="#0B1017" />
+</svg>
